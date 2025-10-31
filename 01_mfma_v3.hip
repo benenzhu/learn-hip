@@ -52,7 +52,6 @@ __global__ void fp16_gemm_16x16x16_NTN(const _Float16* A, const _Float16* B, _Fl
 
   using float16x4 = __attribute__((__vector_size__(4 * sizeof(_Float16)))) _Float16;
   using floatx4 = __attribute__((__vector_size__(4 * sizeof(float)))) float;
-  floatx4 d = {0}; // zero out 4 vanilla VGPRs
 
   if(threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0){
     // printf("Global A  : \n");
@@ -76,6 +75,22 @@ __global__ void fp16_gemm_16x16x16_NTN(const _Float16* A, const _Float16* B, _Fl
   gmem_to_smem(A, shared_A);
   gmem_to_smem(B, shared_B);
   __syncthreads();
+  for(int c_row = 0; c_row < 2; c_row++){
+    for(int c_col = 0; c_col < 2; c_col++){
+      floatx4 d = {0}; // zero out 4 vanilla VGPRs
+      for(int i = 0; i < 2; i++){
+        int a_row_index = c_row + i;         
+        d = __builtin_amdgcn_mfma_f32_16x16x16f16(a, b, d, 0, 0, 0);
+
+      }  
+      for(int i = 0; i < 4; i++){
+        int lane = threadIdx.x % 16;
+        int index = threadIdx.x / 16 * 4;
+        const int d_idx = (c_row * 16 + index + i) * 32 + c_col * 16 + lane;
+        D[d_idx] = d[i];
+      }
+    }
+  }
   for(int i = 0; i < 4; ++i){
     const int a_idx =  threadIdx.x * LDA      // consecutive threads cover 16 consecutive rows
                      + i                      // consecutive registers take consecutive columns
