@@ -51,4 +51,5 @@ should be more throughput? try find a microbenchmark to test it.
 
 - [ ] TODO: make NTN to another file? and also add some microbenchmark to test it.
 
-#### 
+#### TODO: chang it to a version with shared memory?
+as our shape: 32 * 32 * 64 & 32 * 32 * 32

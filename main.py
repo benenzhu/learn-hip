@@ -288,7 +288,7 @@ def bf16_matmul_full_NTN_v4(M, N, K):
     
 # ret = bf16_matmul_full_NTN_v2_opt1(4864, 4096, 4096)
 # ret = bf16_matmul_full_NTN_v2_opt1(256, 256, 128)
-ret = bf16_matmul_full_NTN_v4(256, 256, 64)
+# ret = bf16_matmul_full_NTN_v4(256, 256, 64)
 # ret = bf16_matmul_full_NTN_v4(64*4, 64*4, 128*4)
 
 
@@ -296,3 +296,6 @@ ret = bf16_matmul_full_NTN_v4(256, 256, 64)
 
 
 
+
+mv fp16_gemm_v3_NTN.hip 02_fp16_gemm_v3_NTN.hip
+mv fp16_gemm_v4_NTN.hip 02_fp16_gemm_v4_NTN.hip
