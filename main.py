@@ -119,6 +119,17 @@ def test_bf16_matmul_NTN():
     matmul_kernel((1,1,1), (16,4,1), (A, B, C))
     torch.cuda.synchronize()
     
+    
+def test_bf16_matmul_NTN():
+    matmul_kernel = get_kernel("fp16_gemm_16x16x16_NTN", "01_mfma.hip")  
+    # print(matmul_kernel)
+    A = torch.arange(16*16, device="cuda").reshape(16, 16).half()*0.1
+    B = torch.arange(16*16, device="cuda").reshape(16, 16).half().transpose(0, 1).contiguous()*0.1
+    C = torch.zeros(16*16, device="cuda").reshape(16, 16).half()
+    matmul_kernel((1,1,1), (16,4,1), (A, B, C))
+    torch.cuda.synchronize()
+
+
 # test_bf16_matmul_NTN()
 
 
@@ -291,11 +302,3 @@ def bf16_matmul_full_NTN_v4(M, N, K):
 # ret = bf16_matmul_full_NTN_v4(256, 256, 64)
 # ret = bf16_matmul_full_NTN_v4(64*4, 64*4, 128*4)
 
-
-
-
-
-
-
-mv fp16_gemm_v3_NTN.hip 02_fp16_gemm_v3_NTN.hip
-mv fp16_gemm_v4_NTN.hip 02_fp16_gemm_v4_NTN.hip

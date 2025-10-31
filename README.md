@@ -1,8 +1,9 @@
 # learn hip asm and matmul through hiprtc.
 
 ## ref:
-https://github.com/gau-nernst/learn-cuda/tree/main/02c_matmul_hip
+gau's hip gemm: https://github.com/gau-nernst/learn-cuda/tree/main/02c_matmul_hip
 
+shark-ai's amdgpu kernel optimization guide: https://github.com/nod-ai/shark-ai/blob/main/docs/amdgpu_kernel_optimization_guide.md#mi300
 
 ## gemm target: 
 > `592 TFlops` on NTN shapes, and `654 TFlops` on TNT shapes
@@ -53,3 +54,4 @@ should be more throughput? try find a microbenchmark to test it.
 
 #### TODO: chang it to a version with shared memory?
 as our shape: 32 * 32 * 64 & 32 * 32 * 32
+
