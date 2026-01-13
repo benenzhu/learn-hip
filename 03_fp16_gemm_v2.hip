@@ -30,7 +30,7 @@
 -     165 TF:  remove clear shared memory.
 -     162 TF: use float2 load for shared memory.
 -     382 TF: add swizzle for shared memory.  (+136%)
--     392 TF: add all unroll for params.
+-     396 TF: add all unroll for params.
 [ ] add swizzle for shared memory.
 */
 
