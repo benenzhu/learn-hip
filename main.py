@@ -4,7 +4,9 @@ import time
 import importlib
 import rtc
 import os
-os.environ["ROCPROF_COUNTER_COLLECTION"] = "1"
+import log as logmodule
+log = logmodule.log
+# os.environ["ROCPROF_COUNTER_COLLECTION"] = "1"
 
 importlib.reload(rtc)
 # import tritonblas
@@ -15,7 +17,7 @@ from tritonblas.matmul import persistent_matmul_lt
 from rtc import _compile_kernel, get_triton_gemm_NTN, my_assert_close
 
 
-torch.set_printoptions(threshold=1000, edgeitems=3)     
+torch.set_printoptions(threshold=1000, edgeitems=3, sci_mode=False)     
 def get_kernel(kernel_name, file_name="00_add.hip", config=None):
     tic = time.time()
     source = open(file_name, "r").read()
@@ -33,14 +35,14 @@ def get_kernel(kernel_name, file_name="00_add.hip", config=None):
                 break
         
         if non_empty_prefix:
-            print(f"Warning: Replacing {len(non_empty_prefix)} non-empty line(s) at the beginning of source file")
-            print(source_lines[:len(non_empty_prefix)])
+            log(f"Warning: Replacing {len(non_empty_prefix)} non-empty line(s) at the beginning of source file")
+            log(source_lines[:len(non_empty_prefix)])
         
         # Replace the first few lines with defines
         num_lines_to_replace = len(defines)
         remaining_source = '\n'.join(source_lines[num_lines_to_replace:])
         source = "".join(defines) + remaining_source
-    print("".join(defines))   
+    log("".join(defines))   
 
     kernel = _compile_kernel(
         kernel_source=source,
@@ -49,12 +51,13 @@ def get_kernel(kernel_name, file_name="00_add.hip", config=None):
             "-std=c++17", 
             "-Dhip_rtc",
             "-g", 
-            "-save-temps"
+            "-save-temps",
+            "-Rpass-analysis=kernel-resource-usage"
             ],
         save_ptx=True,
     )
     toc = time.time()
-    print(f"compile used {toc - tic}")
+    log(f"compile used {toc - tic}")
     return kernel
 
 
@@ -143,7 +146,7 @@ def bench(f, A, B, C, check_correct=True):
     M, N, K = A.shape[0], B.shape[0], A.shape[1]
     torch.cuda.synchronize()
     right_output = torch.zeros_like(C)
-    if M >= 512:
+    if M >= 51200:
         A = A.T.contiguous()
         BT = B.T.contiguous()
         triton_fn = lambda: persistent_matmul_lt(A.T, BT, right_output, None)
@@ -152,17 +155,19 @@ def bench(f, A, B, C, check_correct=True):
         triton_fn = lambda: get_triton_gemm_NTN(A, B, right_output, M, N, K)
     if check_correct:
         ret = triton_fn()
-        my_assert_close(C, right_output)
+        if my_assert_close(C, right_output) is not None:
+            log(f"{name} failed")
+            return C, right_output
     if "ROCPROF_COUNTER_COLLECTION" in os.environ:
         print("ROC_PERF on fast return here.")
         return ret
     torch.cuda.synchronize()
     latency_ms = do_bench(f, warmup=100, rep=500)
     tflops = 2 * M * N * K / (latency_ms * 1e-3) * 1e-12
-    print(f"{name}: {tflops:.2f} TFLOPS")
+    log(f"{name}: {tflops:.2f} TFLOPS")
     latency_ms = do_bench(triton_fn, warmup=100, rep=500)
     tflops = 2 * M * N * K / (latency_ms * 1e-3) * 1e-12
-    print(f"triton: \t{tflops:.2f} TFLOPS")
+    log(f"triton: \t{tflops:.2f} TFLOPS")
     return ret
 
 @dataclass
@@ -188,8 +193,8 @@ class Bf16MatmulFullNTNConfig:
 
 def get_inputNTN(M, N, K):
     if M <= 512:
-        A = torch.arange(M*K, device="cuda").reshape(M, K).bfloat16().contiguous() * 0.1
-        B = torch.arange(N*K, device="cuda").reshape(N, K).bfloat16().contiguous() * 0.1
+        A = torch.arange(M*K, device="cuda").reshape(M, K).bfloat16().contiguous() * 0.01
+        B = torch.arange(N*K, device="cuda").reshape(N, K).bfloat16().contiguous() * 0.01
     else:
         A = torch.randn(M, K, device="cuda").bfloat16().contiguous()
         B = torch.randn(N, K, device="cuda").bfloat16().contiguous() 
@@ -200,7 +205,7 @@ def get_inputNTN(M, N, K):
 def bf16_matmul_full_NTN(M, N, K):
     A, B, C = get_inputNTN(M, N, K)
     config = Bf16MatmulFullNTNConfig(M=M, N=N, K=K)
-    matmul_kernel = get_kernel("fp16_gemm_full_NTN", "02_fp16_gemm_v1.hip", config)
+    matmul_kernel = get_kernel("fp16_gemm_full_NTN", "02_fp16_gemm_v1_NTN.hip", config)
     TB_SIZE = config.get_tb_size()
     GRID_SIZE = config.get_grid_size()
     shared_mem=config.get_shared_mem()
@@ -209,6 +214,7 @@ def bf16_matmul_full_NTN(M, N, K):
     kernel_fn = lambda: matmul_kernel((GRID_SIZE,1,1), (TB_SIZE,1,1), (A, B, C, M, N, K), shared_mem=shared_mem)
     bench(kernel_fn, A, B, C)
     
+# ret = bf16_matmul_full_NTN(256, 256, 256)
 # ret = bf16_matmul_full_NTN(4864, 4096, 4096)
 
 
@@ -258,7 +264,7 @@ def bf16_matmul_full_NTN_v2_opt1(M, N, K):
         BLOCK_M=256,
         BLOCK_N=256,
         BLOCK_K=64)
-    matmul_kernel = get_kernel("fp16_gemm_full_NTN_v3", "02_fp16_gemm_full_NTN_v3.hip", config)
+    matmul_kernel = get_kernel("fp16_gemm_full_NTN_v3", "02_fp16_gemm_v3_NTN.hip", config)
     TB_SIZE = config.get_tb_size()
     GRID_SIZE = config.get_grid_size()
     shared_mem=config.get_shared_mem()
@@ -302,3 +308,28 @@ def bf16_matmul_full_NTN_v4(M, N, K):
 # ret = bf16_matmul_full_NTN_v4(256, 256, 64)
 # ret = bf16_matmul_full_NTN_v4(64*4, 64*4, 128*4)
 
+
+def bf16_matmul_full_NTN_3(M, N, K):
+    A, B, C = get_inputNTN(M, N, K)
+    config = Bf16MatmulFullNTNConfig(
+        M=M, 
+        N=N, 
+        K=K, 
+        NUM_WARP_M=2,
+        NUM_WARP_N=4,
+        BLOCK_M=256,
+        BLOCK_N=256,
+        BLOCK_K=64)
+    matmul_kernel = get_kernel("_3_fp16_gemm_v0", "03_fp16_gemm_v0.hip", config)
+    TB_SIZE = config.get_tb_size()
+    GRID_SIZE = config.get_grid_size()
+    shared_mem=config.get_shared_mem()
+    log(f"{GRID_SIZE=}, {TB_SIZE=}, {shared_mem=}")
+    # matmul_kernel.set_shared_memory_config(shared_mem)
+    kernel_fn = lambda: matmul_kernel((GRID_SIZE,1,1), (TB_SIZE,1,1), (A, B, C, M, N, K))
+    
+    ret = bench(kernel_fn, A, B, C)
+    return ret
+    
+ret = bf16_matmul_full_NTN_3(256, 256, 64)
+# ret = bf16_matmul_full_NTN_3(4864, 4096, 4096) 

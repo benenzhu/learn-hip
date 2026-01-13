@@ -1,3 +1,10 @@
+// LOG:
+// V1: raw version
+// V2; update swizzle
+// V3: doint what? 378.54 TFLOPS
+
+
+
 // #define PYTHON_CALL
 // #define M 4864
 // #define N 4096

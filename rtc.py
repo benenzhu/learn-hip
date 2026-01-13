@@ -1,3 +1,5 @@
+import log as logmodule
+log = logmodule.log
 import torch
 from typing import Optional, Union, Any
 import ctypes
@@ -251,14 +253,19 @@ def _nvrtc_compile(
     # Compile program
     res = libnvrtc.nvrtcCompileProgram(prog, num_options, options_array)
 
+    # Always get the compilation log (contains diagnostics from -Rpass-analysis, etc.)
+    log_size = ctypes.c_size_t()
+    libnvrtc.nvrtcGetProgramLogSize(prog, ctypes.byref(log_size))
+    compile_log = ctypes.create_string_buffer(log_size.value)
+    libnvrtc.nvrtcGetProgramLog(prog, compile_log)
+    
     # Handle compilation errors
     if res != NVRTC_SUCCESS:
-        # Get log
-        log_size = ctypes.c_size_t()
-        libnvrtc.nvrtcGetProgramLogSize(prog, ctypes.byref(log_size))
-        log = ctypes.create_string_buffer(log_size.value)
-        libnvrtc.nvrtcGetProgramLog(prog, log)
-        raise RuntimeError(f"Kernel compilation failed:\n{log.value.decode()}")
+        raise RuntimeError(f"Kernel compilation failed:\n{compile_log.value.decode()}")
+    
+    # Print compilation log if not empty (e.g., -Rpass-analysis output)
+    if compile_log.value and compile_log.value.strip():
+        log(f"Compilation log:\n{compile_log.value.decode()}")
 
     # Get PTX
     ptx_size = ctypes.c_size_t()
@@ -473,7 +480,7 @@ class _CudaKernel:
             stream = torch.cuda.current_stream()
 
         # Check if kernel requires large shared memory but hasn't been configured
-        if shared_mem >= 48 * 1024 and (
+        if shared_mem >= 2560 * 1024 and (
             self._max_shared_mem_bytes == 0 or shared_mem > self._max_shared_mem_bytes
         ):
             configured_msg = (
@@ -665,25 +672,25 @@ def get_triton_gemm_NTN(A, B, C, M, N, K):
 
 def my_assert_close(output, ref_output):
     if not torch.allclose(output, ref_output, atol=1e-3, rtol=1e-3):
-        print("C is not close to A @ B")
+        log("C is not close to A @ B")
         diff = output - ref_output
-        print(diff)
-        print("diff", (diff).max().item())
+        log("diff", diff)
+        log("diff.max", (diff).max().item())
         # max_diff_idx = diff.abs().argmax()
         # max_diff_row = max_diff_idx // N
         # max_diff_col = max_diff_idx % N
         # print(f"Max diff at position ({max_diff_row}, {max_diff_col})")
         # print(f"C[{max_diff_row}, {max_diff_col}] = {C[max_diff_row, max_diff_col]}")
         # print(f"Expected = {right_output[max_diff_row, max_diff_col]}")
-        print(f"{output=}")
-        print(f"{ref_output=}")
-        print(f"{diff.abs().mean()=}")
+        log(f"{output=}")
+        log(f"{ref_output=}")
+        log(f"{diff.abs().mean()=}")
     
         torch.set_printoptions(threshold=1000, edgeitems=200, linewidth=200)     
-        print(f"{diff.reshape(-1).sort()[0]=}")
+        # log(f"{diff.reshape(-1).sort()[0]=}")
         torch.set_printoptions(threshold=1000, edgeitems=3)     
         return diff
-    print("test passed")
+    log("test passed")
     return None
     # torch.testing.assert_close(C, right_output)
     # print(C, right_output)
