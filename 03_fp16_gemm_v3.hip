@@ -31,6 +31,8 @@
 -     162 TF: use float2 load for shared memory.
 -     382 TF: add swizzle for shared memory.  (+136%)
 -     396 TF: add all unroll for params.
+- v3: 
+      400 TF: add XCD remap and L2 cache swizzle.  why so still so slow speed....
 [ ] add swizzle for shared memory.
 */
 
