@@ -103,8 +103,8 @@ void _3_fp16_gemm_v0(
 
     for(int iter = 0; iter < total_iter_num; iter++){ 
         if(iter > 0){
-            A_gmem += iter * BLOCK_K;
-            B_gmem += iter * BLOCK_K;
+            A_gmem += BLOCK_K;
+            B_gmem += BLOCK_K;
         }
         { // g2s
             constexpr int total_need_transfer_num = total_shared_size_65536 / THREAD_NUM / 4 / 4;
@@ -153,7 +153,7 @@ void _3_fp16_gemm_v0(
             for(int i = 0; i < 4; i++){ // large_row
                 for(int j = 0; j < 4; j++){ // large_col
                     for(int k = 0; k < 4; k++){ // small_col
-                        A_reg0[i * 16 + j * 4 + k] = B_smem[
+                        A_reg0[i * 16 + j * 4 + k] = A_smem[
                             (warp_id_m_0_1 * 128 + i * 16 + threadIdx.x % 16) * BLOCK_K +
                             j * 16 + k + threadIdx.x / 16 * 4
                         ];
@@ -163,7 +163,7 @@ void _3_fp16_gemm_v0(
             for(int i = 0; i < 4; i++){ // large_row
                 for(int j = 0; j < 4; j++){ // large_col
                     for(int k = 0; k < 4; k++){ // small_col
-                        A_reg1[i * 16 + j * 4 + k] = B_smem[
+                        A_reg1[i * 16 + j * 4 + k] = A_smem[
                             (warp_id_m_0_1 * 128 + 64 + i * 16 + threadIdx.x % 16) * BLOCK_K +
                             (j * 16 + k + threadIdx.x / 16 * 4)
                         ];
@@ -191,8 +191,8 @@ void _3_fp16_gemm_v0(
                     for(int k = 0; k < 4; k++){
                         *((floatx4*)(C_reg1) + c_row * 4 + c_col)
                         = __builtin_amdgcn_mfma_f32_16x16x16bf16_1k(
-                            *((float16x4*)(A_reg1) + c_row * 4 + c_col),
-                            *((float16x4*)(B_reg) + c_row * 4 + c_col),
+                            *((float16x4*)(A_reg1) + c_row * 4 + k),
+                            *((float16x4*)(B_reg) + c_col * 4 + k),
                             *((floatx4*)(C_reg1) + c_row * 4 + c_col),
                             0, 0, 0);
                     }
