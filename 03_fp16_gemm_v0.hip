@@ -1,10 +1,30 @@
+// empty lines for hiprtc.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 /*
 03_v0: 
     use 512 thread
     simple load and calculate.
     pre register allocate.
-
-
+    204 VGPRs;
+    Should have bank conflict problem and load problems.
+- v0: 137.69 TFLOPS
+- [ ] use float4 load
+- [ ] use float2 load for shared memory.
+- [ ] add swizzle for shared memory.
 */
 
 
@@ -100,7 +120,6 @@ void _3_fp16_gemm_v0(
     A_gmem += BM_idx * K;
     B_gmem += BN_idx * K;
 
-
     for(int iter = 0; iter < total_iter_num; iter++){ 
         if(iter > 0){
             A_gmem += BLOCK_K;
@@ -145,7 +164,7 @@ void _3_fp16_gemm_v0(
                     for(int k = 0; k < 4; k++){ // small_col
                         B_reg[i * 16 + j * 4 + k] = B_smem[
                             (warp_id_n_0_3 * 64 + i * 16 + threadIdx.x % 16) * BLOCK_K +
-                            j * 16 + k + threadIdx.x / 16 * 4
+                            j * 16 + k + lane_id / 16 * 4
                         ];
                     }
                 }
@@ -155,7 +174,7 @@ void _3_fp16_gemm_v0(
                     for(int k = 0; k < 4; k++){ // small_col
                         A_reg0[i * 16 + j * 4 + k] = A_smem[
                             (warp_id_m_0_1 * 128 + i * 16 + threadIdx.x % 16) * BLOCK_K +
-                            j * 16 + k + threadIdx.x / 16 * 4
+                            j * 16 + k + lane_id / 16 * 4
                         ];
                     }
                 }
@@ -165,7 +184,7 @@ void _3_fp16_gemm_v0(
                     for(int k = 0; k < 4; k++){ // small_col
                         A_reg1[i * 16 + j * 4 + k] = A_smem[
                             (warp_id_m_0_1 * 128 + 64 + i * 16 + threadIdx.x % 16) * BLOCK_K +
-                            (j * 16 + k + threadIdx.x / 16 * 4)
+                            (j * 16 + k + lane_id / 16 * 4)
                         ];
                     }
                 }
@@ -186,7 +205,9 @@ void _3_fp16_gemm_v0(
                     }
                 }
             }
+            #pragma unroll
             for(int c_row = 0; c_row < 4; c_row++){
+                #pragma unroll
                 for(int c_col = 0; c_col < 4; c_col++){
                     for(int k = 0; k < 4; k++){
                         *((floatx4*)(C_reg1) + c_row * 4 + c_col)
@@ -201,7 +222,7 @@ void _3_fp16_gemm_v0(
             // mfma: 
 
         } // s2r
-
+        __syncthreads();
         
         
     } // main loop for k_iter in ...
@@ -212,9 +233,9 @@ void _3_fp16_gemm_v0(
             for(int k = 0; k < 4; k++) { // small row
                 int row = (BM_idx + i * 16 + k + (threadIdx.x & 63) / 16 * 4 + warp_id_m_0_1 * 128);
                 int col = (BN_idx + j * 16 + threadIdx.x % 16) + warp_id_n_0_3 * 64;
-                if(threadIdx.x == 0){
-                    printf("row, col %d, %d, %lf\n", row, col, C_reg0[i * 16 + j * 4 + k]);
-                }
+                // if(threadIdx.x == 0){
+                //     printf("row, col %d, %d, %lf\n", row, col, C_reg0[i * 16 + j * 4 + k]);
+                // }
                 C_gmem[ row * N + col] = __float2bfloat16(C_reg0[i * 16 + j * 4 + k]);
             }
         }
