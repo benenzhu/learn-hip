@@ -37,7 +37,10 @@
 -     have some register spill now? how to reduce them. 
 -     first write a tile like the hipkittens do now.
 -     491 TF: use float4 for g2s and s2.
-[ ] add swizzle for shared memory.
+- v5:
+-     497 TF: add fast float2bfloat16... now ignore... maybe put into last.
+- 
+- 
 */
 
 
@@ -48,6 +51,7 @@
 
 #include <hip/hip_runtime.h>
 #include <hip/hip_bf16.h>
+#include <bit>
 #ifndef PYTHON_CALL
 constexpr int M = 4096;
 constexpr int N = 4096;
@@ -59,6 +63,16 @@ constexpr int SMEM_STRIDE = 64;
 constexpr int NUM_WARP_M = BLOCK_M / 64;
 constexpr int NUM_WARP_N = BLOCK_N / 64;
 #endif
+
+__device__ float fast_float2bfloat16(float value){
+    return std::bit_cast<__hip_bfloat16>(
+        static_cast<__hip_internal::uint16_t>(
+            std::bit_cast<__hip_internal::uint32_t>(value) >> 16
+        )
+    );        
+};
+
+
 
 #define cdiv(a, b) (((a) + (b) - 1) / (b))
 
@@ -171,11 +185,50 @@ __host__ __device__ inline int chiplet_transform_chunked(
 // }
 
 
+__device__ void g2s(__hip_bfloat16 *shared_mem, __hip_bfloat16 *gmem) { // first tile g2s...
+    using load_type = float4;
+    constexpr int multiplier__4 = sizeof(load_type) / sizeof(__hip_bfloat16);
+    constexpr int total_shared_size_65536 = 65536;
+    constexpr int total_need_transfer_num = total_shared_size_65536 / THREAD_NUM / sizeof(load_type);
+    #pragma unroll
+    for(int i = 0; i < total_need_transfer_num/2; i++) {
+        const int row_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__4) / BLOCK_K;
+        const int col_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__4) % BLOCK_K;
+        *(load_type*)&shared_mem[swizzle<3, 3, 3>(i * THREAD_NUM * multiplier__4 + threadIdx.x * multiplier__4)] = *(load_type*)&gmem[row_idx * K + col_idx];
+    }
+};
+
+__device__ void g2r(__hip_bfloat16 *reg, __hip_bfloat16 *gmem) { // first tile g2s...
+    using load_type = float4;
+    constexpr int multiplier__8 = sizeof(load_type) / sizeof(__hip_bfloat16);
+    constexpr int total_shared_size_65536 = 65536;
+    constexpr int total_need_transfer_num = total_shared_size_65536 / THREAD_NUM / sizeof(load_type);
+    #pragma unroll
+    for(int i = 0; i < total_need_transfer_num/2; i++) {
+        const int row_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__8) / BLOCK_K;
+        const int col_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__8) % BLOCK_K;
+        *(load_type*)&reg[i * multiplier__8] = *(load_type*)&gmem[row_idx * K + col_idx];
+    }
+};
+
+__device__ void r2s(__hip_bfloat16 *shared, __hip_bfloat16 *reg) {
+    using load_type = float4;
+    constexpr int multiplier__8 = sizeof(load_type) / sizeof(__hip_bfloat16);
+    constexpr int total_shared_size_65536 = 65536;
+    constexpr int total_need_transfer_num = total_shared_size_65536 / THREAD_NUM / sizeof(load_type);
+    #pragma unroll
+    for(int i = 0; i < total_need_transfer_num/2; i++) {
+        const int row_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__8) / BLOCK_K;
+        const int col_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__8) % BLOCK_K;
+        *(load_type*)&shared[swizzle<3, 3, 3>(i * THREAD_NUM * multiplier__8 + threadIdx.x * multiplier__8)] = *(load_type*)&reg[i * multiplier__8];
+    }
+}
+
 
 
 __launch_bounds__(THREAD_NUM)
 __global__
-void _3_fp16_gemm_v4(
+void _3_fp16_gemm_v5(
   __hip_bfloat16 *A_gmem,
   __hip_bfloat16 *B_gmem,
   __hip_bfloat16 *C_gmem
@@ -236,34 +289,19 @@ void _3_fp16_gemm_v4(
     A_gmem += BM_idx * K;
     B_gmem += BN_idx * K;
 
-
+    g2s(A_smem, A_gmem);
+    g2s(B_smem, B_gmem);
+    __syncthreads();
+    A_gmem += BLOCK_K;
+    B_gmem += BLOCK_K;
     constexpr int total_iter_num = cdiv(K, BLOCK_K);
     for(int iter = 0; iter < total_iter_num; iter++){   
-        { // first tile g2s...
-            // static_assert(total_need_transfer_num == BLOCK_M * BLOCK_K / 512 / 4);
-            // static_assert(BLOCK_M * BLOCK_K % (512 * 4 * 2) == 0);
-            //                                      total size                num   float  float4.
-            using load_type = float4;
-            constexpr int multiplier__4 = sizeof(load_type) / sizeof(__hip_bfloat16);
-            constexpr int total_need_transfer_num = total_shared_size_65536 / THREAD_NUM / sizeof(load_type);
-            #pragma unroll
-            for(int i = 0; i < total_need_transfer_num/2; i++) {
-                const int row_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__4) / BLOCK_K;
-                const int col_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__4) % BLOCK_K;
-                *(load_type*)&A_smem[swizzle<3, 3, 3>(i * THREAD_NUM * multiplier__4 + threadIdx.x * multiplier__4)] = *(load_type*)&A_gmem[row_idx * K + col_idx];
-            }
-            
-            #pragma unroll
-            for(int i = 0; i < total_need_transfer_num/2; i++){
-                const int row_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__4) / BLOCK_K;
-                const int col_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__4) % BLOCK_K;
-                *(load_type*)&B_smem[swizzle<3, 3, 3>(i * THREAD_NUM * multiplier__4 + threadIdx.x * multiplier__4)] = *(load_type*)&B_gmem[row_idx * K + col_idx];
-            }
-            __syncthreads();
-            if(threadIdx.x == 0){
-                // print_mem<16, 16>(B_smem + 10000);
-            }
-            __syncthreads();
+        constexpr int shared_mem_size = total_shared_size_65536 / THREAD_NUM / 2; 
+        __hip_bfloat16 A_buff[shared_mem_size];
+        __hip_bfloat16 B_buff[shared_mem_size];
+        if (iter != total_iter_num - 1) {
+            g2r(A_buff, A_gmem);
+            g2r(B_buff, B_gmem); 
         }
 
         { // s2r
@@ -352,14 +390,19 @@ void _3_fp16_gemm_v4(
 
         } // s2r
         __syncthreads();
+        if (iter != total_iter_num - 1) {
+            r2s(A_smem, A_buff);
+            r2s(B_smem, B_buff); 
+        }
+        __syncthreads();
     } // main loop for k_iter in ...
     
     // store C:
     for(int i = 0; i < 4; i++) { // row
         for(int j = 0; j < 4; j++) { // col
             for(int k = 0; k < 4; k++) { // small row
-                int row = (BM_idx + i * 16 + k + (threadIdx.x & 63) / 16 * 4 + warp_id_m_0_1 * 128);
-                int col = (BN_idx + j * 16 + threadIdx.x % 16) + warp_id_n_0_3 * 64;
+                const int row = (BM_idx + i * 16 + k + (threadIdx.x & 63) / 16 * 4 + warp_id_m_0_1 * 128);
+                const int col = (BN_idx + j * 16 + threadIdx.x % 16) + warp_id_n_0_3 * 64;
                 C_gmem[ row * N + col] = __float2bfloat16(C_reg0[i * 16 + j * 4 + k]);
             }
         }
@@ -367,8 +410,8 @@ void _3_fp16_gemm_v4(
     for(int i = 0; i < 4; i++) { // row
         for(int j = 0; j < 4; j++) { // col
             for(int k = 0; k < 4; k++) { // small row
-                int row = (BM_idx + i * 16 + k + (threadIdx.x & 63) / 16 * 4 + warp_id_m_0_1 * 128 + 64);
-                int col = (BN_idx + j * 16 + threadIdx.x % 16) + warp_id_n_0_3 * 64;
+                const int row = (BM_idx + i * 16 + k + (threadIdx.x & 63) / 16 * 4 + warp_id_m_0_1 * 128 + 64);
+                const int col = (BN_idx + j * 16 + threadIdx.x % 16) + warp_id_n_0_3 * 64;
                 C_gmem[ row * N + col] = __float2bfloat16(C_reg1[i * 16 + j * 4 + k]);
             }
         }

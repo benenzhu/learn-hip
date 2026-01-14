@@ -50,10 +50,11 @@ def get_kernel(kernel_name, file_name="00_add.hip", config=None):
         kernel_source=source,
         kernel_name=kernel_name,
         nvcc_options=[
-            "-std=c++17", 
+            "-std=c++20", 
             "-Dhip_rtc",
             "-g", 
             "-save-temps",
+            # "-fverbose-asm",
             "-Rpass-analysis=kernel-resource-usage"
             ],
         save_ptx=True,
@@ -101,7 +102,7 @@ def test_add_kernel_v2():
     print("test passed")
     return C
     
-test_add_kernel_v2()
+# test_add_kernel_v2()
 
 def test_bf16_matmul_NNN():
     matmul_kernel = get_kernel("fp16_gemm_16x16x16_NNN", "01_mfma.hip")  
@@ -366,8 +367,6 @@ def _03_fp16_gemm_v2(M, N, K):
 # _03_fp16_gemm_v0: 138.06 TFLOPS
 # ret = _03_fp16_gemm_v2(4864, 4096, 4096) 
 
-
-
 def _03_fp16_gemm_v4(M, N, K):
     A, B, C = get_inputNTN(M, N, K)
     config = Bf16MatmulFullNTNConfig(
@@ -392,4 +391,30 @@ def _03_fp16_gemm_v4(M, N, K):
     
 
 # _03_fp16_gemm_v0: 138.06 TFLOPS
-# ret = _03_fp16_gemm_v4(4864, 4096, 4096) 
+ret = _03_fp16_gemm_v4(4864, 4096, 4096) 
+
+def _03_fp16_gemm_v5(M, N, K):
+    A, B, C = get_inputNTN(M, N, K)
+    config = Bf16MatmulFullNTNConfig(
+        M=M, 
+        N=N, 
+        K=K, 
+        NUM_WARP_M=2,
+        NUM_WARP_N=4,
+        BLOCK_M=256,
+        BLOCK_N=256,
+        BLOCK_K=64)
+    matmul_kernel = get_kernel("_3_fp16_gemm_v5", "03_fp16_gemm_v5.hip", config)
+    TB_SIZE = config.get_tb_size()
+    GRID_SIZE = config.get_grid_size()
+    shared_mem=config.get_shared_mem()
+    log(f"{GRID_SIZE=}, {TB_SIZE=}, {shared_mem=}")
+    # matmul_kernel.set_shared_memory_config(shared_mem)
+    kernel_fn = lambda: matmul_kernel((GRID_SIZE,1,1), (TB_SIZE,1,1), (A, B, C, M, N, K))
+    
+    ret = bench(kernel_fn, A, B, C)
+    return ret
+    
+
+# _03_fp16_gemm_v0: 138.06 TFLOPS
+ret = _03_fp16_gemm_v5(4864, 4096, 4096) 

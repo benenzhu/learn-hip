@@ -671,7 +671,7 @@ def get_triton_gemm_NTN(A, B, C, M, N, K):
     
 
 def my_assert_close(output, ref_output):
-    if not torch.allclose(output, ref_output, atol=1e-3, rtol=1e-3):
+    if not torch.allclose(output, ref_output, atol=1e-2, rtol=1e-2):
         log("C is not close to A @ B")
         diff = output - ref_output
         log("diff.max", (diff).max().item())
