@@ -1,3 +1,19 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 #include <hip/hip_runtime.h>
 __global__
 void add_kernel(const int *A, const int *B, int *C, int M, int N) {

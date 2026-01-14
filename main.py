@@ -21,6 +21,7 @@ torch.set_printoptions(threshold=1000, edgeitems=3, sci_mode=False)
 def get_kernel(kernel_name, file_name="00_add.hip", config=None):
     tic = time.time()
     source = open(file_name, "r").read()
+    defines = []
     if config is not None:
         defines = ["#define PYTHON_CALL\n"]
         for key, value in vars(config).items():
@@ -42,7 +43,8 @@ def get_kernel(kernel_name, file_name="00_add.hip", config=None):
         num_lines_to_replace = len(defines)
         remaining_source = '\n'.join(source_lines[num_lines_to_replace:])
         source = "".join(defines) + remaining_source
-    log("".join(defines))   
+    if len(defines) > 0:
+        log("".join(defines))   
 
     kernel = _compile_kernel(
         kernel_source=source,
@@ -70,7 +72,7 @@ def test_add_kernel():
     B = torch.randint(-100, 100, (M, N), device="cuda", dtype=torch.int32) 
     C = torch.empty_like(A)
     
-    add_kernel = get_kernel("add_kernel", "00_add.hip")
+    add_kernel = get_kernel("add_kernel", "00_add_v0.hip")
     print("start_kernel here", A.data_ptr(), B.data_ptr(), C.data_ptr(), M, N)
     add_kernel((M, 1, 1), (256, 1, 1), (A, B, C, M, N))
     print("end_kernel here")
@@ -89,7 +91,7 @@ def test_add_kernel_v2():
     B = torch.randint(-100, 100, (M, N), device="cuda", dtype=torch.int32) 
     C = torch.empty_like(A)
     
-    add_kernel = get_kernel("add_kernel", "00_add_2.hip")
+    add_kernel = get_kernel("add_kernel", "00_add_v1_builtin_assume.hip")
     print("start_kernel here", A.data_ptr(), B.data_ptr(), C.data_ptr(), M, N)
     add_kernel((M, 1, 1), (256, 1, 1), (A, B, C, M, N))
     print("end_kernel here")
@@ -99,7 +101,7 @@ def test_add_kernel_v2():
     print("test passed")
     return C
     
-# test_add_kernel_v2()
+test_add_kernel_v2()
 
 def test_bf16_matmul_NNN():
     matmul_kernel = get_kernel("fp16_gemm_16x16x16_NNN", "01_mfma.hip")  
@@ -390,4 +392,4 @@ def _03_fp16_gemm_v4(M, N, K):
     
 
 # _03_fp16_gemm_v0: 138.06 TFLOPS
-ret = _03_fp16_gemm_v4(4864, 4096, 4096) 
+# ret = _03_fp16_gemm_v4(4864, 4096, 4096) 
