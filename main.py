@@ -366,7 +366,7 @@ def _03_fp16_gemm_v2(M, N, K):
 
 
 
-def _03_fp16_gemm_v2(M, N, K):
+def _03_fp16_gemm_v4(M, N, K):
     A, B, C = get_inputNTN(M, N, K)
     config = Bf16MatmulFullNTNConfig(
         M=M, 
@@ -377,7 +377,7 @@ def _03_fp16_gemm_v2(M, N, K):
         BLOCK_M=256,
         BLOCK_N=256,
         BLOCK_K=64)
-    matmul_kernel = get_kernel("_3_fp16_gemm_v0", "03_fp16_gemm_v3.hip", config)
+    matmul_kernel = get_kernel("_3_fp16_gemm_v4", "03_fp16_gemm_v4.hip", config)
     TB_SIZE = config.get_tb_size()
     GRID_SIZE = config.get_grid_size()
     shared_mem=config.get_shared_mem()
@@ -390,4 +390,4 @@ def _03_fp16_gemm_v2(M, N, K):
     
 
 # _03_fp16_gemm_v0: 138.06 TFLOPS
-ret = _03_fp16_gemm_v2(4864, 4096, 4096) 
+ret = _03_fp16_gemm_v4(4864, 4096, 4096) 

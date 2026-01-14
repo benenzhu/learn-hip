@@ -34,7 +34,9 @@
 - v3: 
 -     400 TF: add XCD remap and L2 cache swizzle.  why so still so slow speed....
 - v4:
--     
+-     have some register spill now? how to reduce them. 
+-     first write a tile like the hipkittens do now.
+-     491 TF: use float4 for g2s and s2.
 [ ] add swizzle for shared memory.
 */
 
@@ -130,9 +132,50 @@ __host__ __device__ inline int chiplet_transform_chunked(
 }
 
 
+
+
+// template <int row=256, int col=64, int BB = 4, int MM = 2, int SS = 4>
+// struct smem_tile{
+//     __hip_bfloat16 data[row * col]; 
+//     static constexpr int _row = row;
+//     static constexpr int _col = col;
+// };
+
+
+// struct gmem_tile{
+//     __hip_bfloat16 *ptr;
+//     const int row;
+//     const int col;
+//     gmem_tile(int row, int col, __hip_bfloat16 *ptr): row(row), col(col), ptr(ptr){
+//     }
+// };
+
+
+// template <int float_size=2>
+// void g2s(smem_tile<256, 64> &s_tile, gmem_tile &g_tile, const int g_row, const int g_col){
+//     if constexpr(float_size==2){
+//         constexpr int multiplier__4 = sizeof(float2) / sizeof(__hip_bfloat16);
+//         using s_tile_type = std::remove_reference_t<decltype(s_tile)>;
+//         static constexpr int total_need_transfer_num = s_tile_type::_col * s_tile_type::_row / multiplier__4;
+//         #pragma unroll
+//         for(int i = 0; i < total_need_transfer_num/2; i++){
+//             const int  
+//         }
+//         for(int i = 0; i < 4; i++) {
+//             #pragma unroll
+//             for(int j = 0; j < 4; j++) {
+//                 s_tile.data[g_row + i * 16 + j * 4] = g_tile.ptr[g_row + i * 16 + j * 4];
+//             }
+//         }
+//     }
+// }
+
+
+
+
 __launch_bounds__(THREAD_NUM)
 __global__
-void _3_fp16_gemm_v0(
+void _3_fp16_gemm_v4(
   __hip_bfloat16 *A_gmem,
   __hip_bfloat16 *B_gmem,
   __hip_bfloat16 *C_gmem
@@ -150,13 +193,12 @@ void _3_fp16_gemm_v0(
     __shared__ __hip_bfloat16 A_smem[BLOCK_M * BLOCK_K];
     __shared__ __hip_bfloat16 B_smem[BLOCK_N * BLOCK_K];
     constexpr int total_shared_size_65536 = sizeof(A_smem) + sizeof(B_smem);
-    constexpr int total_iter_num = cdiv(K, BLOCK_K);
     
-    constexpr int C_reg_num__128 = BLOCK_M * BLOCK_N / 512;
-    constexpr int warp_reg_num__8192 = C_reg_num__128 * 64;
-    float C_reg0[C_reg_num__128/2];
-    float C_reg1[C_reg_num__128/2];
-    for(int i = 0; i < C_reg_num__128/2; i++){
+    constexpr int C_reg_half__64 = BLOCK_M * BLOCK_N / 512 / 2;
+    constexpr int warp_reg_num__8192 = C_reg_half__64 * 2 * 64;
+    float C_reg0[C_reg_half__64];
+    float C_reg1[C_reg_half__64];
+    for(int i = 0; i < C_reg_half__64; i++){
         C_reg0[i] = 0.0f;
         C_reg1[i] = 0.0f;
     }
@@ -174,12 +216,12 @@ void _3_fp16_gemm_v0(
     // Groups WGM consecutive M-tiles together for better L2 locality
     const int num_pid_m = cdiv(M, BLOCK_M);
     const int num_pid_n = cdiv(N, BLOCK_N);
-    int num_wgid_in_group = WGM * num_pid_n;
-    int group_id = wgid / num_wgid_in_group;
-    int first_pid_m = group_id * WGM;
-    int group_size_m = min(num_pid_m - first_pid_m, WGM);
-    int pid_m = first_pid_m + ((wgid % num_wgid_in_group) % group_size_m);
-    int pid_n = (wgid % num_wgid_in_group) / group_size_m;
+    const int num_wgid_in_group = WGM * num_pid_n;
+    const int group_id = wgid / num_wgid_in_group;
+    const int first_pid_m = group_id * WGM;
+    const int group_size_m = min(num_pid_m - first_pid_m, WGM);
+    const int pid_m = first_pid_m + ((wgid % num_wgid_in_group) % group_size_m);
+    const int pid_n = (wgid % num_wgid_in_group) / group_size_m;
     // if(threadIdx.x == 0){
     //     printf("xcd: %02d, pid_m: %02d, pid_n: %d, blockIdx.x: %d\n",  blockIdx.x % 8, pid_m, pid_n, blockIdx.x);
     // }
@@ -195,27 +237,27 @@ void _3_fp16_gemm_v0(
     B_gmem += BN_idx * K;
 
 
+    constexpr int total_iter_num = cdiv(K, BLOCK_K);
     for(int iter = 0; iter < total_iter_num; iter++){   
         { // first tile g2s...
             // static_assert(total_need_transfer_num == BLOCK_M * BLOCK_K / 512 / 4);
             // static_assert(BLOCK_M * BLOCK_K % (512 * 4 * 2) == 0);
             //                                      total size                num   float  float4.
-            using load_type = float2;
+            using load_type = float4;
             constexpr int multiplier__4 = sizeof(load_type) / sizeof(__hip_bfloat16);
             constexpr int total_need_transfer_num = total_shared_size_65536 / THREAD_NUM / sizeof(load_type);
             #pragma unroll
-            for(int i = 0; i < total_need_transfer_num/2; i++){
-        
+            for(int i = 0; i < total_need_transfer_num/2; i++) {
                 const int row_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__4) / BLOCK_K;
                 const int col_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__4) % BLOCK_K;
-                *(load_type*)&A_smem[swizzle<4, 2, 4>(i * THREAD_NUM * multiplier__4 + threadIdx.x * multiplier__4)] = *(load_type*)&A_gmem[row_idx * K + col_idx];
+                *(load_type*)&A_smem[swizzle<3, 3, 3>(i * THREAD_NUM * multiplier__4 + threadIdx.x * multiplier__4)] = *(load_type*)&A_gmem[row_idx * K + col_idx];
             }
             
             #pragma unroll
             for(int i = 0; i < total_need_transfer_num/2; i++){
                 const int row_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__4) / BLOCK_K;
                 const int col_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__4) % BLOCK_K;
-                *(load_type*)&B_smem[swizzle<4, 2, 4>(i * THREAD_NUM * multiplier__4 + threadIdx.x * multiplier__4)] = *(load_type*)&B_gmem[row_idx * K + col_idx];
+                *(load_type*)&B_smem[swizzle<3, 3, 3>(i * THREAD_NUM * multiplier__4 + threadIdx.x * multiplier__4)] = *(load_type*)&B_gmem[row_idx * K + col_idx];
             }
             __syncthreads();
             if(threadIdx.x == 0){
@@ -237,50 +279,38 @@ void _3_fp16_gemm_v0(
             #pragma unroll
             for(int i = 0; i < 4; i++){ // large_row
                 #pragma unroll
-                for(int j = 0; j < 4; j++){ // large_col
-                    *(float2*)&B_reg[i * 16 + j * 4] = 
-                    *(float2*)&B_smem[
-                        swizzle<4, 2, 4>(
+                for(int j = 0; j < 2; j++){ // large_col
+                    *(float4*)&B_reg[i * 16 + j * 8] = 
+                    *(float4*)&B_smem[
+                        swizzle<3, 3, 3>(
                             (warp_id_n_0_3 * 64 + i * 16 + threadIdx.x % 16) * BLOCK_K +
-                            j * 16 + lane_id / 16 * 4
+                            j * 32 + lane_id / 16 * 8
                         )
                     ];
-                    // for(int k = 0; k < 4; k++){ // small_col
-                    //     B_reg[i * 16 + j * 4 + k] = B_smem[
-                    //         (warp_id_n_0_3 * 64 + i * 16 + threadIdx.x % 16) * BLOCK_K +
-                    //         j * 16 + k + lane_id / 16 * 4
-                    //     ];
-                    // }
                 }
             }
             #pragma unroll
             for(int i = 0; i < 4; i++){ // large_row
                 #pragma unroll
-                for(int j = 0; j < 4; j++){ // large_col
-                    *(float2*)&A_reg0[i * 16 + j * 4] = 
-                    *(float2*)&A_smem[
-                        swizzle<4, 2, 4>(
+                for(int j = 0; j < 2; j++){ // large_col
+                    *(float4*)&A_reg0[i * 16 + j * 8] = 
+                    *(float4*)&A_smem[
+                        swizzle<3, 3, 3>(
                             (warp_id_m_0_1 * 128 + i * 16 + threadIdx.x % 16) * BLOCK_K +
-                            j * 16 + lane_id / 16 * 4
+                            j * 32 + lane_id / 16 * 8
                         )
                     ];
-                    // for(int k = 0; k < 4; k++){ // small_col
-                    //     A_reg0[i * 16 + j * 4 + k] = A_smem[
-                    //         (warp_id_m_0_1 * 128 + i * 16 + threadIdx.x % 16) * BLOCK_K +
-                    //         j * 16 + k + lane_id / 16 * 4
-                    //     ];
-                    // }
                 }
             }
             #pragma unroll
             for(int i = 0; i < 4; i++){ // large_row
                 #pragma unroll
-                for(int j = 0; j < 4; j++){ // large_col
-                    *(float2*)&A_reg1[i * 16 + j * 4] = 
-                    *(float2*)&A_smem[
-                        swizzle<4, 2, 4>(
+                for(int j = 0; j < 2; j++){ // large_col
+                    *(float4*)&A_reg1[i * 16 + j * 8] = 
+                    *(float4*)&A_smem[
+                        swizzle<3, 3, 3>(
                             (warp_id_m_0_1 * 128 + 64 + i * 16 + threadIdx.x % 16) * BLOCK_K +
-                            (j * 16 + lane_id / 16 * 4)
+                            (j * 32 + lane_id / 16 * 8)
                         )
                     ];
                 }
