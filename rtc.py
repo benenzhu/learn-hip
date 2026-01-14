@@ -674,11 +674,11 @@ def my_assert_close(output, ref_output):
     if not torch.allclose(output, ref_output, atol=1e-3, rtol=1e-3):
         log("C is not close to A @ B")
         diff = output - ref_output
-        log("diff", diff)
         log("diff.max", (diff).max().item())
         if diff.abs().mean().cpu().item() < 1e-3:
             log(f"{diff.abs().mean()=} < 1e-3, pass")
             return None
+        log("diff", diff)
         # max_diff_idx = diff.abs().argmax()
         # max_diff_row = max_diff_idx // N
         # max_diff_col = max_diff_idx % N
