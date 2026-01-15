@@ -189,9 +189,9 @@ __device__ void g2s(__hip_bfloat16 *shared_mem, __hip_bfloat16 *gmem) { // first
     using load_type = float4;
     constexpr int multiplier__4 = sizeof(load_type) / sizeof(__hip_bfloat16);
     constexpr int total_shared_size_65536 = 65536;
-    constexpr int total_need_transfer_num = total_shared_size_65536 / THREAD_NUM / sizeof(load_type);
+    constexpr int total_need_transfer_num = total_shared_size_65536 / THREAD_NUM / sizeof(load_type) / 2;
     // #pragma unroll
-    for(int i = 0; i < total_need_transfer_num/2; i++) {
+    for(int i = 0; i < total_need_transfer_num; i++) {
         const int row_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__4) / BLOCK_K;
         const int col_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__4) % BLOCK_K;
         *(load_type*)&shared_mem[swizzle<3, 3, 3>(i * THREAD_NUM * multiplier__4 + threadIdx.x * multiplier__4)] = *(load_type*)&gmem[row_idx * K + col_idx];
@@ -202,9 +202,9 @@ __device__ void g2r(__hip_bfloat16 *reg, __hip_bfloat16 *gmem) { // first tile g
     using load_type = float4;
     constexpr int multiplier__8 = sizeof(load_type) / sizeof(__hip_bfloat16);
     constexpr int total_shared_size_65536 = 65536;
-    constexpr int total_need_transfer_num = total_shared_size_65536 / THREAD_NUM / sizeof(load_type);
+    constexpr int total_need_transfer_num = total_shared_size_65536 / THREAD_NUM / sizeof(load_type) / 2;
     // #pragma unroll
-    for(int i = 0; i < total_need_transfer_num/2; i++) {
+    for(int i = 0; i < total_need_transfer_num; i++) {
         const int row_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__8) / BLOCK_K;
         const int col_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__8) % BLOCK_K;
         *(load_type*)&reg[i * multiplier__8] = *(load_type*)&gmem[row_idx * K + col_idx];
@@ -215,9 +215,9 @@ __device__ void r2s(__hip_bfloat16 *shared, __hip_bfloat16 *reg) {
     using load_type = float4;
     constexpr int multiplier__8 = sizeof(load_type) / sizeof(__hip_bfloat16);
     constexpr int total_shared_size_65536 = 65536;
-    constexpr int total_need_transfer_num = total_shared_size_65536 / THREAD_NUM / sizeof(load_type);
+    constexpr int total_need_transfer_num = total_shared_size_65536 / THREAD_NUM / sizeof(load_type) / 2;
     // #pragma unroll
-    for(int i = 0; i < total_need_transfer_num/2; i++) {
+    for(int i = 0; i < total_need_transfer_num; i++) {
         const int row_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__8) / BLOCK_K;
         const int col_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__8) % BLOCK_K;
         *(load_type*)&shared[swizzle<3, 3, 3>(i * THREAD_NUM * multiplier__8 + threadIdx.x * multiplier__8)] = *(load_type*)&reg[i * multiplier__8];
