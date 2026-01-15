@@ -224,6 +224,35 @@ __device__ void r2s(__hip_bfloat16 *shared, __hip_bfloat16 *reg) {
     }
 }
 
+__device__ void s2r(__hip_bfloat16 *reg, __hip_bfloat16 *shared, const int j, const int large_row, const int lane_id){
+    // 256 * 64
+    for(int i = 0; i < 4; i++){
+        *(float4*)&reg[i * 16 + j * 8] = 
+        *(float4*)&shared[
+            swizzle<3,3,3>(
+                (large_row * 64 + i * 16 + threadIdx.x % 16) * BLOCK_K + 
+                j * 32 + lane_id / 16 * 8
+            )
+        ];
+    }
+}
+
+
+__device__ void mma(__hip_bfloat16 *C_reg, __hip_bfloat16 *A_reg, __hip_bfloat16 *B_reg){
+    #pragma unroll
+    for(int c_row = 0; c_row < 4; c_row++){
+        #pragma unroll
+        for(int c_col = 0; c_col < 4; c_col++){
+            #pragma unroll
+            for(int k = 0; k < 2; k++){
+  
+            }
+        }
+    }
+}
+
+
+
 
 
 __launch_bounds__(THREAD_NUM, 2)
@@ -306,11 +335,25 @@ void _3_fp16_gemm_v5(
         }
 
         { // s2r
-            constexpr int AB_tile_reg__64 = BLOCK_M * BLOCK_K / 4 / 64;
+            constexpr int AB_tile_reg__32 = 64 * 32 / 64;
             //                                                 分了4个块，  64个warp.
-            __hip_bfloat16 B_reg[AB_tile_reg__64];
-            __hip_bfloat16 A_reg0[AB_tile_reg__64];
-            __hip_bfloat16 A_reg1[AB_tile_reg__64];
+            __hip_bfloat16 B_reg[64 * 32];
+            __hip_bfloat16 A_reg[64 * 32];
+            
+            s2r(B_reg, B_smem, 0, warp_id_n_0_3, lane_id);
+            s2r(A_reg, A_smem, 0, warp_id_m_0_1 * 2, lane_id);
+            mma(C_reg0, A_reg, B_reg);
+            
+            s2r(A_reg, A_smem, 0, warp_id_m_0_1 * 2 + 1, lane_id); 
+            mma(C_reg1, A_reg, B_reg);
+
+            s2r(B_reg, B_smem, 1, warp_id_n_0_3, lane_id);
+            s2r(A_reg, A_smem, 1, warp_id_m_0_1 * 2, lane_id);
+            mma(C_reg0, A_reg, B_reg);
+            
+            s2r(A_reg, A_smem, 1, warp_id_m_0_1 * 2 + 1, lane_id);
+            mma(C_reg1, A_reg, B_reg);
+        
             // warp_M: 2 warp_N: 4
             // B_reg: 64 * 64;
             // 64 * 64 的块， 分成了 16 * 16 的 16 个块.
@@ -319,6 +362,7 @@ void _3_fp16_gemm_v5(
             for(int i = 0; i < 4; i++){ // large_row
                 #pragma unroll
                 for(int j = 0; j < 2; j++){ // large_col
+                    // 8 ele
                     *(float4*)&B_reg[i * 16 + j * 8] = 
                     *(float4*)&B_smem[
                         swizzle<3, 3, 3>(
