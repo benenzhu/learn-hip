@@ -227,7 +227,7 @@ __device__ void r2s(__hip_bfloat16 *shared, __hip_bfloat16 *reg) {
 __device__ void s2r(__hip_bfloat16 *reg, __hip_bfloat16 *shared, const int j, const int large_row, const int lane_id){
     // 256 * 64
     for(int i = 0; i < 4; i++){
-        *(float4*)&reg[i * 16 + j * 8] = 
+        *(float4*)&reg[i * 8] = 
         *(float4*)&shared[
             swizzle<3,3,3>(
                 (large_row * 64 + i * 16 + threadIdx.x % 16) * BLOCK_K + 
@@ -238,14 +238,23 @@ __device__ void s2r(__hip_bfloat16 *reg, __hip_bfloat16 *shared, const int j, co
 }
 
 
-__device__ void mma(__hip_bfloat16 *C_reg, __hip_bfloat16 *A_reg, __hip_bfloat16 *B_reg){
+__device__ void mma(float *C_reg, __hip_bfloat16 A_reg[32], __hip_bfloat16 B_reg[32]){
+    using float16x4 = __attribute__((__vector_size__(4 * sizeof(_Float16)))) _Float16;
+    using floatx4 = __attribute__((__vector_size__(4 * sizeof(float)))) float;
+    // 32元素布局: 4 c_row * 2 k_iter * 4 elements = 32
+    static_assert((3 * 2 + 1) * 4 + 3 < 32);  // max access index < 32
     #pragma unroll
     for(int c_row = 0; c_row < 4; c_row++){
         #pragma unroll
         for(int c_col = 0; c_col < 4; c_col++){
             #pragma unroll
             for(int k = 0; k < 2; k++){
-  
+                *((floatx4*)(C_reg) + c_row * 4 + c_col)
+                = __builtin_amdgcn_mfma_f32_16x16x16bf16_1k(
+                    *((float16x4*)(A_reg) + c_row * 2 + k),  // 32元素: c_row * 2
+                    *((float16x4*)(B_reg) + c_col * 2 + k),  // 32元素: c_col * 2
+                    *((floatx4*)(C_reg) + c_row * 4 + c_col),
+                    0, 0, 0);
             }
         }
     }
@@ -255,7 +264,7 @@ __device__ void mma(__hip_bfloat16 *C_reg, __hip_bfloat16 *A_reg, __hip_bfloat16
 
 
 
-__launch_bounds__(THREAD_NUM, 2)
+__launch_bounds__(THREAD_NUM)
 __global__
 void _3_fp16_gemm_v5(
   __hip_bfloat16 *A_gmem,
@@ -321,24 +330,22 @@ void _3_fp16_gemm_v5(
     g2s(A_smem, A_gmem);
     g2s(B_smem, B_gmem);
     __syncthreads();
-    A_gmem += BLOCK_K;
-    B_gmem += BLOCK_K;
     constexpr int total_iter_num = cdiv(K, BLOCK_K);
-    for(int iter = 0; iter < total_iter_num; iter++){   
+    for(int iter = 0; iter < total_iter_num - 1; iter++){   
         constexpr int shared_mem_size = BLOCK_M * BLOCK_K / THREAD_NUM; 
         __hip_bfloat16 A_buff[shared_mem_size];
         __hip_bfloat16 B_buff[shared_mem_size];
         constexpr int buff_reg_size___32 = sizeof(A_buff) / 4 + sizeof(B_buff) / 4;
-        if (iter != total_iter_num - 1) {
-            g2r(A_buff, A_gmem);
-            g2r(B_buff, B_gmem); 
-        }
+        A_gmem += BLOCK_K;
+        B_gmem += BLOCK_K;
+        g2r(A_buff, A_gmem);
+        g2r(B_buff, B_gmem); 
 
         { // s2r
             constexpr int AB_tile_reg__32 = 64 * 32 / 64;
             //                                                 分了4个块，  64个warp.
-            __hip_bfloat16 B_reg[64 * 32];
-            __hip_bfloat16 A_reg[64 * 32];
+            __hip_bfloat16 B_reg[AB_tile_reg__32];
+            __hip_bfloat16 A_reg[AB_tile_reg__32];
             
             s2r(B_reg, B_smem, 0, warp_id_n_0_3, lane_id);
             s2r(A_reg, A_smem, 0, warp_id_m_0_1 * 2, lane_id);
@@ -352,115 +359,59 @@ void _3_fp16_gemm_v5(
             mma(C_reg0, A_reg, B_reg);
             
             s2r(A_reg, A_smem, 1, warp_id_m_0_1 * 2 + 1, lane_id);
-            mma(C_reg1, A_reg, B_reg);
-        
-            // warp_M: 2 warp_N: 4
-            // B_reg: 64 * 64;
-            // 64 * 64 的块， 分成了 16 * 16 的 16 个块.
-            // 加载时候都是加载一行连着4个从上往下.
-            #pragma unroll
-            for(int i = 0; i < 4; i++){ // large_row
-                #pragma unroll
-                for(int j = 0; j < 2; j++){ // large_col
-                    // 8 ele
-                    *(float4*)&B_reg[i * 16 + j * 8] = 
-                    *(float4*)&B_smem[
-                        swizzle<3, 3, 3>(
-                            (warp_id_n_0_3 * 64 + i * 16 + threadIdx.x % 16) * BLOCK_K +
-                            j * 32 + lane_id / 16 * 8
-                        )
-                    ];
-                }
-            }
-            #pragma unroll
-            for(int i = 0; i < 4; i++){ // large_row
-                #pragma unroll
-                for(int j = 0; j < 2; j++){ // large_col
-                    *(float4*)&A_reg0[i * 16 + j * 8] = 
-                    *(float4*)&A_smem[
-                        swizzle<3, 3, 3>(
-                            (warp_id_m_0_1 * 128 + i * 16 + threadIdx.x % 16) * BLOCK_K +
-                            j * 32 + lane_id / 16 * 8
-                        )
-                    ];
-                }
-            }
-            #pragma unroll
-            for(int i = 0; i < 4; i++){ // large_row
-                #pragma unroll
-                for(int j = 0; j < 2; j++){ // large_col
-                    *(float4*)&A_reg1[i * 16 + j * 8] = 
-                    *(float4*)&A_smem[
-                        swizzle<3, 3, 3>(
-                            (warp_id_m_0_1 * 128 + 64 + i * 16 + threadIdx.x % 16) * BLOCK_K +
-                            (j * 32 + lane_id / 16 * 8)
-                        )
-                    ];
-                }
-            }
-            
-            #pragma unroll
-            for(int c_row = 0; c_row < 4; c_row++){
-                #pragma unroll
-                for(int c_col = 0; c_col < 4; c_col++){
-                    #pragma unroll
-                    for(int k = 0; k < 4; k++){
-                        *((floatx4*)(C_reg0) + c_row * 4 + c_col)
-                        = __builtin_amdgcn_mfma_f32_16x16x16bf16_1k(
-                            *((float16x4*)(A_reg0) + c_row * 4 + k),
-                            *((float16x4*)(B_reg) + c_col * 4 + k),
-                            *((floatx4*)(C_reg0) + c_row * 4 + c_col),
-                            0, 0, 0);
-                    }
-                }
-            }
-            #pragma unroll
-            for(int c_row = 0; c_row < 4; c_row++){
-                #pragma unroll
-                for(int c_col = 0; c_col < 4; c_col++){
-                    #pragma unroll
-                    for(int k = 0; k < 4; k++){
-                        *((floatx4*)(C_reg1) + c_row * 4 + c_col)
-                        = __builtin_amdgcn_mfma_f32_16x16x16bf16_1k(
-                            *((float16x4*)(A_reg1) + c_row * 4 + k),
-                            *((float16x4*)(B_reg) + c_col * 4 + k),
-                            *((floatx4*)(C_reg1) + c_row * 4 + c_col),
-                            0, 0, 0);
-                    }
-                }
-            }
-            // mfma: 
-            A_gmem += BLOCK_K;
-            B_gmem += BLOCK_K;
+            mma(C_reg1, A_reg, B_reg); 
 
         } // s2r
+
         __syncthreads();
-        if (iter != total_iter_num - 1) {
-            r2s(A_smem, A_buff);
-            r2s(B_smem, B_buff); 
-        }
+        r2s(A_smem, A_buff);
+        r2s(B_smem, B_buff); 
         __syncthreads();
     } // main loop for k_iter in ...
     
+    {
+        { // s2r
+            constexpr int AB_tile_reg__32 = 64 * 32 / 64;
+            //                                                 分了4个块，  64个warp.
+            __hip_bfloat16 B_reg[AB_tile_reg__32];
+            __hip_bfloat16 A_reg[AB_tile_reg__32];
+            
+            s2r(B_reg, B_smem, 0, warp_id_n_0_3, lane_id);
+            s2r(A_reg, A_smem, 0, warp_id_m_0_1 * 2, lane_id);
+            mma(C_reg0, A_reg, B_reg);
+            
+            s2r(A_reg, A_smem, 0, warp_id_m_0_1 * 2 + 1, lane_id); 
+            mma(C_reg1, A_reg, B_reg);
+
+            s2r(B_reg, B_smem, 1, warp_id_n_0_3, lane_id);
+            s2r(A_reg, A_smem, 1, warp_id_m_0_1 * 2, lane_id);
+            mma(C_reg0, A_reg, B_reg);
+            
+            s2r(A_reg, A_smem, 1, warp_id_m_0_1 * 2 + 1, lane_id);
+            mma(C_reg1, A_reg, B_reg); 
+
+        } // s2r
+    }
+    
     // store C:
-    for(int i = 0; i < 4; i++) { // row
-        for(int j = 0; j < 4; j++) { // col
-            for(int k = 0; k < 4; k++) { // small row
-                const int row = (BM_idx + i * 16 + k + (threadIdx.x & 63) / 16 * 4 + warp_id_m_0_1 * 128);
-                const int col = (BN_idx + j * 16 + threadIdx.x % 16) + warp_id_n_0_3 * 64;
-                C_gmem[ row * N + col] = __float2bfloat16(C_reg0[i * 16 + j * 4 + k]);
+    {
+        for(int i = 0; i < 4; i++) { // row
+            for(int j = 0; j < 4; j++) { // col
+                for(int k = 0; k < 4; k++) { // small row
+                    const int row = (BM_idx + i * 16 + k + (threadIdx.x & 63) / 16 * 4 + warp_id_m_0_1 * 128);
+                    const int col = (BN_idx + j * 16 + threadIdx.x % 16) + warp_id_n_0_3 * 64;
+                    C_gmem[ row * N + col] = __float2bfloat16(C_reg0[i * 16 + j * 4 + k]);
+                }
             }
-        }
-    } 
-    for(int i = 0; i < 4; i++) { // row
-        for(int j = 0; j < 4; j++) { // col
-            for(int k = 0; k < 4; k++) { // small row
-                const int row = (BM_idx + i * 16 + k + (threadIdx.x & 63) / 16 * 4 + warp_id_m_0_1 * 128 + 64);
-                const int col = (BN_idx + j * 16 + threadIdx.x % 16) + warp_id_n_0_3 * 64;
-                C_gmem[ row * N + col] = __float2bfloat16(C_reg1[i * 16 + j * 4 + k]);
+        } 
+        for(int i = 0; i < 4; i++) { // row
+            for(int j = 0; j < 4; j++) { // col
+                for(int k = 0; k < 4; k++) { // small row
+                    const int row = (BM_idx + i * 16 + k + (threadIdx.x & 63) / 16 * 4 + warp_id_m_0_1 * 128 + 64);
+                    const int col = (BN_idx + j * 16 + threadIdx.x % 16) + warp_id_n_0_3 * 64;
+                    C_gmem[ row * N + col] = __float2bfloat16(C_reg1[i * 16 + j * 4 + k]);
+                }
             }
-        }
-    } 
-
-
+        } 
+    }
 }

@@ -171,7 +171,7 @@ def bench(f, A, B, C, check_correct=True):
     latency_ms = do_bench(triton_fn, warmup=100, rep=500)
     tflops = 2 * M * N * K / (latency_ms * 1e-3) * 1e-12
     log(f"triton: \t{tflops:.2f} TFLOPS")
-    return ret
+    return ret, None
 
 @dataclass
 class Bf16MatmulFullNTNConfig:
@@ -416,5 +416,6 @@ def _03_fp16_gemm_v5(M, N, K):
     return ret
     
 
+# out, right = _03_fp16_gemm_v5(256, 256, 256)
 # _03_fp16_gemm_v0: 138.06 TFLOPS
 ret = _03_fp16_gemm_v5(4864, 4096, 4096) 
