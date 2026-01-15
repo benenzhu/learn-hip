@@ -190,7 +190,7 @@ __device__ void g2s(__hip_bfloat16 *shared_mem, __hip_bfloat16 *gmem) { // first
     constexpr int multiplier__4 = sizeof(load_type) / sizeof(__hip_bfloat16);
     constexpr int total_shared_size_65536 = 65536;
     constexpr int total_need_transfer_num = total_shared_size_65536 / THREAD_NUM / sizeof(load_type);
-    #pragma unroll
+    // #pragma unroll
     for(int i = 0; i < total_need_transfer_num/2; i++) {
         const int row_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__4) / BLOCK_K;
         const int col_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__4) % BLOCK_K;
@@ -203,7 +203,7 @@ __device__ void g2r(__hip_bfloat16 *reg, __hip_bfloat16 *gmem) { // first tile g
     constexpr int multiplier__8 = sizeof(load_type) / sizeof(__hip_bfloat16);
     constexpr int total_shared_size_65536 = 65536;
     constexpr int total_need_transfer_num = total_shared_size_65536 / THREAD_NUM / sizeof(load_type);
-    #pragma unroll
+    // #pragma unroll
     for(int i = 0; i < total_need_transfer_num/2; i++) {
         const int row_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__8) / BLOCK_K;
         const int col_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__8) % BLOCK_K;
@@ -216,7 +216,7 @@ __device__ void r2s(__hip_bfloat16 *shared, __hip_bfloat16 *reg) {
     constexpr int multiplier__8 = sizeof(load_type) / sizeof(__hip_bfloat16);
     constexpr int total_shared_size_65536 = 65536;
     constexpr int total_need_transfer_num = total_shared_size_65536 / THREAD_NUM / sizeof(load_type);
-    #pragma unroll
+    // #pragma unroll
     for(int i = 0; i < total_need_transfer_num/2; i++) {
         const int row_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__8) / BLOCK_K;
         const int col_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__8) % BLOCK_K;
@@ -226,7 +226,7 @@ __device__ void r2s(__hip_bfloat16 *shared, __hip_bfloat16 *reg) {
 
 
 
-__launch_bounds__(THREAD_NUM)
+__launch_bounds__(THREAD_NUM, 2)
 __global__
 void _3_fp16_gemm_v5(
   __hip_bfloat16 *A_gmem,
@@ -296,9 +296,10 @@ void _3_fp16_gemm_v5(
     B_gmem += BLOCK_K;
     constexpr int total_iter_num = cdiv(K, BLOCK_K);
     for(int iter = 0; iter < total_iter_num; iter++){   
-        constexpr int shared_mem_size = total_shared_size_65536 / THREAD_NUM / 2; 
+        constexpr int shared_mem_size = BLOCK_M * BLOCK_K / THREAD_NUM; 
         __hip_bfloat16 A_buff[shared_mem_size];
         __hip_bfloat16 B_buff[shared_mem_size];
+        constexpr int buff_reg_size___32 = sizeof(A_buff) / 4 + sizeof(B_buff) / 4;
         if (iter != total_iter_num - 1) {
             g2r(A_buff, A_gmem);
             g2r(B_buff, B_gmem); 

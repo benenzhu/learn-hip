@@ -391,7 +391,7 @@ def _03_fp16_gemm_v4(M, N, K):
     
 
 # _03_fp16_gemm_v0: 138.06 TFLOPS
-ret = _03_fp16_gemm_v4(4864, 4096, 4096) 
+# ret = _03_fp16_gemm_v4(4864, 4096, 4096) 
 
 def _03_fp16_gemm_v5(M, N, K):
     A, B, C = get_inputNTN(M, N, K)
