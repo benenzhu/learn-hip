@@ -4,3 +4,7 @@
 .specstory
 __pycache__
 gpucore.*
+*.o
+*.out
+*.txt
+*.hipfb
