@@ -54,6 +54,8 @@ def get_kernel(kernel_name, file_name="00_add.hip", config=None):
             "-Dhip_rtc",
             "-g", 
             "-save-temps",
+            "-ldl",
+            "-lm",
             # "-fverbose-asm",
             "-Rpass-analysis=kernel-resource-usage"
             ],
@@ -156,6 +158,7 @@ def bench(f, A, B, C, check_correct=True):
     else:
         BT = B.T
         triton_fn = lambda: get_triton_gemm_NTN(A, B, right_output, M, N, K)
+        # triton_fn = lambda: torch.matmul(A, B.T, out = right_output)
     if check_correct:
         ret = triton_fn()
         if my_assert_close(C, right_output) is not None:
@@ -171,7 +174,7 @@ def bench(f, A, B, C, check_correct=True):
     latency_ms = do_bench(triton_fn, warmup=100, rep=500)
     tflops = 2 * M * N * K / (latency_ms * 1e-3) * 1e-12
     log(f"triton: \t{tflops:.2f} TFLOPS")
-    return ret, None
+    return C, right_output
 
 @dataclass
 class Bf16MatmulFullNTNConfig:
@@ -199,8 +202,8 @@ def get_inputNTN(M, N, K):
         A = torch.arange(M*K, device="cuda").reshape(M, K).bfloat16().contiguous() * 0.01
         B = torch.arange(N*K, device="cuda").reshape(N, K).bfloat16().contiguous() * 0.01
     else:
-        A = torch.randn(M, K, device="cuda").bfloat16().contiguous()
-        B = torch.randn(N, K, device="cuda").bfloat16().contiguous() 
+        A = torch.randn(M, K, device="cuda").bfloat16().contiguous() * 0.1
+        B = torch.randn(N, K, device="cuda").bfloat16().contiguous() * 0.1
     C = torch.zeros(M, N, device="cuda").bfloat16().contiguous()
     return A, B, C
 

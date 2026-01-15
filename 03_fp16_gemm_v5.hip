@@ -198,16 +198,83 @@ __device__ void g2s(__hip_bfloat16 *shared_mem, __hip_bfloat16 *gmem) { // first
     }
 };
 
+using uint32_t =__hip_internal::uint32_t;
+using uint16_t = __hip_internal::uint16_t;
+using uint8_t = __hip_internal::uint8_t;
+using uint64_t = __hip_internal::uint64_t;
+
+using i32x4 = uint32_t __attribute__((ext_vector_type(4)));
+struct buffer_resource {
+    uint64_t ptr;
+    uint32_t range;
+    uint32_t config;
+};
+
+__device__ inline buffer_resource make_buffer_resource(uint64_t ptr, uint32_t range, uint32_t config) {
+    return {ptr, range, config};
+}
+
+__device__ inline i32x4 make_srsrc(const void* ptr, uint32_t range_bytes, uint32_t row_stride_bytes = 0) {
+    uint64_t as_int = reinterpret_cast<uint64_t>(ptr);   // width = sizeof(void*)
+    uint64_t  as_u64 = static_cast<uint64_t>(as_int);    // widen if host is 32-bit
+    buffer_resource rsrc = make_buffer_resource(as_u64, range_bytes, 0x110000);
+
+    row_stride_bytes &= 0x3FFF;
+    if (row_stride_bytes) {
+        // - The swizzle stride lives in bits 13:0 of word2.
+        //   Max value = 0x3FFF (8 KiB – one cache line per bank).
+        uint64_t stride_field = row_stride_bytes;
+        stride_field = stride_field | 0x4000;         // Cache swizzle
+        stride_field = stride_field | 0x8000;         // Swizzle enable
+        rsrc.ptr |= stride_field << 48;
+    }
+
+    return *reinterpret_cast<const i32x4*>(&rsrc);
+}
+
+__device__ uint64_t llvm_amdgcn_raw_buffer_load_b64(i32x4 srsrc, uint32_t voffset, uint32_t soffset, uint32_t coherency)
+    __asm("llvm.amdgcn.raw.buffer.load.i64");
+
+__device__ __uint128_t llvm_amdgcn_raw_buffer_load_b128(i32x4 srsrc, uint32_t voffset, uint32_t soffset, uint32_t coherency)
+    __asm("llvm.amdgcn.raw.buffer.load.i128");
+
+__device__ void llvm_amdgcn_raw_buffer_store_b8(uint8_t vdata, i32x4 srsrc, uint32_t voffset, uint32_t soffset, uint32_t coherency)
+    __asm("llvm.amdgcn.raw.buffer.store.i8");
+
+__device__ void llvm_amdgcn_raw_buffer_store_b16(uint16_t vdata, i32x4 srsrc, uint32_t voffset, uint32_t soffset, uint32_t coherency)
+    __asm("llvm.amdgcn.raw.buffer.store.i16");
+
+__device__ void llvm_amdgcn_raw_buffer_store_b32(uint32_t vdata, i32x4 srsrc, uint32_t voffset, uint32_t soffset, uint32_t coherency)
+    __asm("llvm.amdgcn.raw.buffer.store.i32");
+
+__device__ void llvm_amdgcn_raw_buffer_store_b64(uint64_t vdata, i32x4 srsrc, uint32_t voffset, uint32_t soffset, uint32_t coherency)
+    __asm("llvm.amdgcn.raw.buffer.store.i64");
+
+__device__ void llvm_amdgcn_raw_buffer_store_b128(__uint128_t vdata, i32x4 srsrc, uint32_t voffset, uint32_t soffset, uint32_t coherency)
+    __asm("llvm.amdgcn.raw.buffer.store.i128");
+
 __device__ void g2r(__hip_bfloat16 *reg, __hip_bfloat16 *gmem) { // first tile g2s...
     using load_type = float4;
     constexpr int multiplier__8 = sizeof(load_type) / sizeof(__hip_bfloat16);
     constexpr int total_shared_size_65536 = 65536;
     constexpr int total_need_transfer_num = total_shared_size_65536 / THREAD_NUM / sizeof(load_type) / 2;
+    
+    const int row_stride = K;
+    const int row_stride_bytes = row_stride * sizeof(__hip_bfloat16);
+  
+    // buffer resource
+    const int total_bytes = row_stride * 256 * sizeof(__hip_bfloat16);
+    i32x4 srsrc = make_srsrc(gmem, total_bytes, row_stride_bytes);
+
+    const int laneid = threadIdx.x % 512;
+
     // #pragma unroll
     for(int i = 0; i < total_need_transfer_num; i++) {
         const int row_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__8) / BLOCK_K;
         const int col_idx = ((THREAD_NUM * i + threadIdx.x) * multiplier__8) % BLOCK_K;
-        *(load_type*)&reg[i * multiplier__8] = *(load_type*)&gmem[row_idx * K + col_idx];
+        const int byte_offset = (row_idx * K + col_idx) * sizeof(__hip_bfloat16);
+        __uint128_t raw = llvm_amdgcn_raw_buffer_load_b128(srsrc, byte_offset, 0, 0);
+        *(load_type*)&reg[i * multiplier__8] = *reinterpret_cast<load_type*>(&raw);
     }
 };
 
@@ -273,10 +340,12 @@ __device__ void mma(float *C_reg, __hip_bfloat16 A_reg[32], __hip_bfloat16 B_reg
 }
 
 
+// #define BARRIER(prio) __builtin_amdgcn_s_barrier(); __builtin_amdgcn_sched_barrier(0); __builtin_amdgcn_s_setprio(prio);
+#define BARRIER(prio) 
 
-
-
-__launch_bounds__(THREAD_NUM)
+// __attribute__((amdgpu_flat_work_group_size(512, 512)))
+// __attribute__((amdgpu_num_vgpr(128)))  // 限制VGPR到128，强制编译器用AGPR存累加器
+__launch_bounds__(THREAD_NUM, 2)
 __global__
 void _3_fp16_gemm_v5(
   __hip_bfloat16 *A_gmem,
@@ -345,55 +414,81 @@ void _3_fp16_gemm_v5(
     g2s(A_smem, A_gmem);
     g2s(B_smem, B_gmem);
     __syncthreads();
+    const int warp_row = __builtin_amdgcn_readfirstlane(threadIdx.x / 64 / 4);
+    if(warp_row == 1){
+        BARRIER(0);
+    }
     constexpr int total_iter_num = cdiv(K, BLOCK_K);
     for(int iter = 0; iter < total_iter_num - 1; iter++){   
         constexpr int shared_mem_size = BLOCK_M * BLOCK_K / THREAD_NUM; 
 
+        __hip_bfloat16 A_buff[shared_mem_size];
+        __hip_bfloat16 B_buff[shared_mem_size];
+        constexpr int buff_reg_size___32 = sizeof(A_buff) / 4 + sizeof(B_buff) / 4;
+        A_gmem += BLOCK_K;
+        B_gmem += BLOCK_K;
+        g2r(A_buff, A_gmem);
+        g2r(B_buff, B_gmem); 
 
         { // s2r
             //                                                 分了4个块，  64个warp.
             
             s2r(B_reg, B_smem, 0, warp_id_n_0_3, lane_id);
             s2r(A_reg, A_smem, 0, warp_id_m_0_1 * 2, lane_id);
+            BARRIER(1);
+
             mma(C_reg0, A_reg, B_reg);
+            BARRIER(0);
             
             s2r(A_reg, A_smem, 0, warp_id_m_0_1 * 2 + 1, lane_id); 
+
+            BARRIER(1);
             mma(C_reg1, A_reg, B_reg);
+            BARRIER(0);
 
             s2r(B_reg, B_smem, 1, warp_id_n_0_3, lane_id);
             s2r(A_reg, A_smem, 1, warp_id_m_0_1 * 2, lane_id);
+
+            BARRIER(1);
             mma(C_reg0, A_reg, B_reg);
+
+            BARRIER(0); 
             
             s2r(A_reg, A_smem, 1, warp_id_m_0_1 * 2 + 1, lane_id);
+            BARRIER(1);
             mma(C_reg1, A_reg, B_reg); 
-
+            BARRIER(0);
         } // s2r
 
-        asm volatile("" ::: "memory");  // 编译器屏障，阻止重排
-        asm volatile("s_waitcnt lgkmcnt(0)");
-        asm volatile("s_waitcnt vmcnt(0)");
-        __builtin_amdgcn_s_barrier();
-        __builtin_amdgcn_sched_barrier(0);
+        // asm volatile("" ::: "memory");  // 编译器屏障，阻止重排
+        // asm volatile("s_waitcnt lgkmcnt(0)");
+        // asm volatile("s_waitcnt vmcnt(0)");
+        // __builtin_amdgcn_s_barrier();
+        // __builtin_amdgcn_sched_barrier(0);
         {
-            __hip_bfloat16 A_buff[shared_mem_size];
-            __hip_bfloat16 B_buff[shared_mem_size];
-            constexpr int buff_reg_size___32 = sizeof(A_buff) / 4 + sizeof(B_buff) / 4;
-            A_gmem += BLOCK_K;
-            B_gmem += BLOCK_K;
-            g2r(A_buff, A_gmem);
-            g2r(B_buff, B_gmem); 
+
+            BARRIER(0);
             __syncthreads();
             r2s(A_smem, A_buff);
             r2s(B_smem, B_buff); 
             __syncthreads();
+            BARRIER(0);
         }
-        asm volatile("" ::: "memory");  // 编译器屏障，阻止重排
-        asm volatile("s_waitcnt lgkmcnt(0)");
-        asm volatile("s_waitcnt vmcnt(0)");
-        __builtin_amdgcn_s_barrier();
-        __builtin_amdgcn_sched_barrier(0);
+        // asm volatile("" ::: "memory");  // 编译器屏障，阻止重排
+        // asm volatile("s_waitcnt lgkmcnt(0)");
+        // asm volatile("s_waitcnt vmcnt(0)");
+        // __builtin_amdgcn_s_barrier();
+        // __builtin_amdgcn_sched_barrier(0);
     } // main loop for k_iter in ...
+    if(warp_row == 0){
+        BARRIER(0);
+    }
     
+    // asm volatile("" ::: "memory");  // 编译器屏障，阻止重排
+    // asm volatile("s_waitcnt lgkmcnt(0)");
+    // asm volatile("s_waitcnt vmcnt(0)");
+    // __builtin_amdgcn_s_barrier();
+    // __builtin_amdgcn_sched_barrier(0);
     {
         { // s2r
             constexpr int AB_tile_reg__32 = 64 * 32 / 64;
@@ -417,6 +512,11 @@ void _3_fp16_gemm_v5(
 
         } // s2r
     }
+    asm volatile("" ::: "memory");  // 编译器屏障，阻止重排
+    asm volatile("s_waitcnt lgkmcnt(0)");
+    asm volatile("s_waitcnt vmcnt(0)");
+    __builtin_amdgcn_s_barrier();
+    __builtin_amdgcn_sched_barrier(0);  
     
     // store C:
     {
