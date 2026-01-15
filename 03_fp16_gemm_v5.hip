@@ -226,15 +226,27 @@ __device__ void r2s(__hip_bfloat16 *shared, __hip_bfloat16 *reg) {
 
 __device__ void s2r(__hip_bfloat16 *reg, __hip_bfloat16 *shared, const int j, const int large_row, const int lane_id){
     // 256 * 64
+    shared += swizzle<3, 3, 3>((large_row * 64 + threadIdx.x % 16) * BLOCK_K + j * 32 + lane_id / 16 * 8);
+    // const __hip_internal::uint32_t addr = reinterpret_cast<__hip_internal::uint64_t>(shared);
+    #pragma unroll
     for(int i = 0; i < 4; i++){
-        *(float4*)&reg[i * 8] = 
-        *(float4*)&shared[
-            swizzle<3,3,3>(
-                (large_row * 64 + i * 16 + threadIdx.x % 16) * BLOCK_K + 
-                j * 32 + lane_id / 16 * 8
-            )
-        ];
+        // asm volatile(
+        //     "ds_read_b128 %0, %1, offset: %2\n"
+        //     : "=v"(*reinterpret_cast<float4*>(reg + i * 8))
+        //     : "v"(addr), "i"(i * 16 * BLOCK_K * 2)
+        //     : "memory"
+        // );
+        *(float4*)&reg[i * 8] = *(float4*)&shared[i * 16 * BLOCK_K];
+        // *(float4*)&reg[i * 8] = 
+        // *(float4*)&shared[
+        //     swizzle<3,3,3>(
+        //         (large_row * 64 + i * 16 + threadIdx.x % 16) * BLOCK_K + 
+        //         j * 32 + lane_id / 16 * 8
+        //     )
+        // ];
     }
+    // TODO: optimize this
+    // asm volatile("s_waitcnt lgkmcnt(0)");
 }
 
 
@@ -289,6 +301,9 @@ void _3_fp16_gemm_v5(
     constexpr int warp_reg_num__8192 = C_reg_half__64 * 2 * 64;
     float C_reg0[C_reg_half__64];
     float C_reg1[C_reg_half__64];
+    constexpr int AB_tile_reg__32 = 64 * 32 / 64;
+    __hip_bfloat16 B_reg[AB_tile_reg__32];
+    __hip_bfloat16 A_reg[AB_tile_reg__32];
     for(int i = 0; i < C_reg_half__64; i++){
         C_reg0[i] = 0.0f;
         C_reg1[i] = 0.0f;
@@ -333,19 +348,10 @@ void _3_fp16_gemm_v5(
     constexpr int total_iter_num = cdiv(K, BLOCK_K);
     for(int iter = 0; iter < total_iter_num - 1; iter++){   
         constexpr int shared_mem_size = BLOCK_M * BLOCK_K / THREAD_NUM; 
-        __hip_bfloat16 A_buff[shared_mem_size];
-        __hip_bfloat16 B_buff[shared_mem_size];
-        constexpr int buff_reg_size___32 = sizeof(A_buff) / 4 + sizeof(B_buff) / 4;
-        A_gmem += BLOCK_K;
-        B_gmem += BLOCK_K;
-        g2r(A_buff, A_gmem);
-        g2r(B_buff, B_gmem); 
+
 
         { // s2r
-            constexpr int AB_tile_reg__32 = 64 * 32 / 64;
             //                                                 分了4个块，  64个warp.
-            __hip_bfloat16 B_reg[AB_tile_reg__32];
-            __hip_bfloat16 A_reg[AB_tile_reg__32];
             
             s2r(B_reg, B_smem, 0, warp_id_n_0_3, lane_id);
             s2r(A_reg, A_smem, 0, warp_id_m_0_1 * 2, lane_id);
@@ -363,18 +369,37 @@ void _3_fp16_gemm_v5(
 
         } // s2r
 
-        __syncthreads();
-        r2s(A_smem, A_buff);
-        r2s(B_smem, B_buff); 
-        __syncthreads();
+        asm volatile("" ::: "memory");  // 编译器屏障，阻止重排
+        asm volatile("s_waitcnt lgkmcnt(0)");
+        asm volatile("s_waitcnt vmcnt(0)");
+        __builtin_amdgcn_s_barrier();
+        __builtin_amdgcn_sched_barrier(0);
+        {
+            __hip_bfloat16 A_buff[shared_mem_size];
+            __hip_bfloat16 B_buff[shared_mem_size];
+            constexpr int buff_reg_size___32 = sizeof(A_buff) / 4 + sizeof(B_buff) / 4;
+            A_gmem += BLOCK_K;
+            B_gmem += BLOCK_K;
+            g2r(A_buff, A_gmem);
+            g2r(B_buff, B_gmem); 
+            __syncthreads();
+            r2s(A_smem, A_buff);
+            r2s(B_smem, B_buff); 
+            __syncthreads();
+        }
+        asm volatile("" ::: "memory");  // 编译器屏障，阻止重排
+        asm volatile("s_waitcnt lgkmcnt(0)");
+        asm volatile("s_waitcnt vmcnt(0)");
+        __builtin_amdgcn_s_barrier();
+        __builtin_amdgcn_sched_barrier(0);
     } // main loop for k_iter in ...
     
     {
         { // s2r
             constexpr int AB_tile_reg__32 = 64 * 32 / 64;
             //                                                 分了4个块，  64个warp.
-            __hip_bfloat16 B_reg[AB_tile_reg__32];
-            __hip_bfloat16 A_reg[AB_tile_reg__32];
+            // __hip_bfloat16 B_reg[AB_tile_reg__32];
+            // __hip_bfloat16 A_reg[AB_tile_reg__32];
             
             s2r(B_reg, B_smem, 0, warp_id_n_0_3, lane_id);
             s2r(A_reg, A_smem, 0, warp_id_m_0_1 * 2, lane_id);
