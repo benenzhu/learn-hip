@@ -39,8 +39,9 @@
 -     491 TF: use float4 for g2s and s2.
 - v5:
 -     497 TF: add fast float2bfloat16... now ignore... maybe put into last.
-- 
-- 
+-     592 TF: for close barrier...
+-     535 TF: for open barrier...
+-     so shared memory interleave can do much more... 
 */
 
 
@@ -341,6 +342,7 @@ __device__ void mma(float *C_reg, __hip_bfloat16 A_reg[32], __hip_bfloat16 B_reg
 
 
 #define BARRIER(prio) __builtin_amdgcn_s_barrier(); __builtin_amdgcn_sched_barrier(0); __builtin_amdgcn_s_setprio(prio);
+// #define BARRIER(prio)
 
 // __attribute__((amdgpu_flat_work_group_size(512, 512)))
 // __attribute__((amdgpu_num_vgpr(128)))  // 限制VGPR到128，强制编译器用AGPR存累加器
