@@ -168,10 +168,10 @@ def bench(f, A, B, C, check_correct=True):
         print("ROC_PERF on fast return here.")
         return ret
     torch.cuda.synchronize()
-    latency_ms = do_bench(f, warmup=100, rep=500)
+    latency_ms = do_bench(f, warmup=100, rep=500, return_mode="median")
     tflops = 2 * M * N * K / (latency_ms * 1e-3) * 1e-12
     log(f"{name}: {tflops:.2f} TFLOPS")
-    latency_ms = do_bench(triton_fn, warmup=100, rep=500)
+    latency_ms = do_bench(triton_fn, warmup=100, rep=500, return_mode="median")
     tflops = 2 * M * N * K / (latency_ms * 1e-3) * 1e-12
     log(f"triton: \t{tflops:.2f} TFLOPS")
     return C, right_output
@@ -419,6 +419,40 @@ def _03_fp16_gemm_v5(M, N, K):
     return ret
     
 
-# out, right = _03_fp16_gemm_v5(256, 256, 256)
-# _03_fp16_gemm_v0: 138.06 TFLOPS
-ret = _03_fp16_gemm_v5(4864, 4096, 4096) 
+# ret = _03_fp16_gemm_v5(4864, 4096, 4096) 
+
+
+
+def _03_fp16_gemm_v6(M, N, K):
+    A, B, C = get_inputNTN(M, N, K)
+    config = Bf16MatmulFullNTNConfig(
+        M=M, 
+        N=N, 
+        K=K, 
+        NUM_WARP_M=2,
+        NUM_WARP_N=4,
+        BLOCK_M=256,
+        BLOCK_N=256,
+        BLOCK_K=64)
+    matmul_kernel = get_kernel("_3_fp16_gemm_v6", "03_fp16_gemm_v6.hip", config)
+    TB_SIZE = config.get_tb_size()
+    GRID_SIZE = config.get_grid_size()
+    shared_mem=config.get_shared_mem()
+    log(f"{GRID_SIZE=}, {TB_SIZE=}, {shared_mem=}")
+    # matmul_kernel.set_shared_memory_config(shared_mem)
+    kernel_fn = lambda: matmul_kernel((GRID_SIZE,1,1), (TB_SIZE,1,1), (A, B, C, M, N, K))
+    # profiler = torch.profiler.profile(
+    #     activities=[
+    #         torch.profiler.ProfilerActivity.CUDA
+    #     ],
+    #     record_shapes=False,
+    #     with_stack=False, 
+    # ) 
+    # with profiler:
+    ret = bench(kernel_fn, A, B, C)
+    # profiler.export_chrome_trace("03_fp16_gemm_v6_trace.json")
+    return ret
+    
+
+ret = _03_fp16_gemm_v6(4864, 4096, 4096) 
+# ret = _03_fp16_gemm_v6(4864, 4096, 8192) 

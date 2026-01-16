@@ -8,3 +8,4 @@ gpucore.*
 *.out
 *.txt
 *.hipfb
+*.json

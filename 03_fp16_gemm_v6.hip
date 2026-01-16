@@ -347,10 +347,10 @@ __device__ void mma(float *C_reg, __hip_bfloat16 A_reg[32], __hip_bfloat16 B_reg
 // __attribute__((amdgpu_num_vgpr(128)))  // 限制VGPR到128，强制编译器用AGPR存累加器
 __launch_bounds__(THREAD_NUM, 2)
 __global__
-void _3_fp16_gemm_v5(
-  __hip_bfloat16 *A_gmem,
-  __hip_bfloat16 *B_gmem,
-  __hip_bfloat16 *C_gmem
+void _3_fp16_gemm_v6(
+  __hip_bfloat16* __restrict__ A_gmem,
+  __hip_bfloat16* __restrict__ B_gmem,
+  __hip_bfloat16* __restrict__ C_gmem
 ) {
     // __hip_bfloat16 Atile[]
     
@@ -427,12 +427,14 @@ void _3_fp16_gemm_v5(
         constexpr int buff_reg_size___32 = sizeof(A_buff) / 4 + sizeof(B_buff) / 4;
         A_gmem += BLOCK_K;
         B_gmem += BLOCK_K;
-        g2r(A_buff, A_gmem);
-        g2r(B_buff, B_gmem); 
+        
 
         { // s2r
             //                                                 分了4个块，  64个warp.
             
+            // 4 * float 4 read.
+            g2r(A_buff, A_gmem);
+            // 4 * float 4 read per.
             s2r(B_reg, B_smem, 0, warp_id_n_0_3, lane_id);
             s2r(A_reg, A_smem, 0, warp_id_m_0_1 * 2, lane_id);
             BARRIER(1);
@@ -440,14 +442,18 @@ void _3_fp16_gemm_v5(
             mma(C_reg0, A_reg, B_reg);
             BARRIER(0);
             
+            // 4 * float 4 read.
             s2r(A_reg, A_smem, 0, warp_id_m_0_1 * 2 + 1, lane_id); 
+            g2r(B_buff, B_gmem); 
 
             BARRIER(1);
             mma(C_reg1, A_reg, B_reg);
             BARRIER(0);
 
+            // 4 * float 4 read.
             s2r(B_reg, B_smem, 1, warp_id_n_0_3, lane_id);
             s2r(A_reg, A_smem, 1, warp_id_m_0_1 * 2, lane_id);
+            // 4 * float 4 read.
 
             BARRIER(1);
             mma(C_reg0, A_reg, B_reg);
@@ -466,7 +472,6 @@ void _3_fp16_gemm_v5(
         // __builtin_amdgcn_s_barrier();
         // __builtin_amdgcn_sched_barrier(0);
         {
-
             BARRIER(0);
             __syncthreads();
             r2s(A_smem, A_buff);
@@ -512,16 +517,19 @@ void _3_fp16_gemm_v5(
 
         } // s2r
     }
-    asm volatile("" ::: "memory");  // 编译器屏障，阻止重排
-    asm volatile("s_waitcnt lgkmcnt(0)");
-    asm volatile("s_waitcnt vmcnt(0)");
-    __builtin_amdgcn_s_barrier();
-    __builtin_amdgcn_sched_barrier(0);  
+    // asm volatile("" ::: "memory");  // 编译器屏障，阻止重排
+    // asm volatile("s_waitcnt lgkmcnt(0)");
+    // asm volatile("s_waitcnt vmcnt(0)");
+    // __builtin_amdgcn_s_barrier();
+    // __builtin_amdgcn_sched_barrier(0);  
     
     // store C:
     {
+        #pragma unroll
         for(int i = 0; i < 4; i++) { // row
+            #pragma unroll
             for(int j = 0; j < 4; j++) { // col
+                #pragma unroll
                 for(int k = 0; k < 4; k++) { // small row
                     const int row = (BM_idx + i * 16 + k + (threadIdx.x & 63) / 16 * 4 + warp_id_m_0_1 * 128);
                     const int col = (BN_idx + j * 16 + threadIdx.x % 16) + warp_id_n_0_3 * 64;
@@ -529,8 +537,11 @@ void _3_fp16_gemm_v5(
                 }
             }
         } 
+        #pragma unroll
         for(int i = 0; i < 4; i++) { // row
+            #pragma unroll
             for(int j = 0; j < 4; j++) { // col
+                #pragma unroll
                 for(int k = 0; k < 4; k++) { // small row
                     const int row = (BM_idx + i * 16 + k + (threadIdx.x & 63) / 16 * 4 + warp_id_m_0_1 * 128 + 64);
                     const int col = (BN_idx + j * 16 + threadIdx.x % 16) + warp_id_n_0_3 * 64;

@@ -647,7 +647,7 @@ def get_triton_gemm_NTN(A, B, C, M, N, K):
     B = B.T
     BLOCK_M = 256
     BLOCK_N = 256
-    BLOCK_K = 32
+    BLOCK_K = 64
     grid = (triton.cdiv(M, BLOCK_M) * triton.cdiv(N, BLOCK_N),)
     matmul_kernel[grid](
         a_ptr = A, 
@@ -665,7 +665,7 @@ def get_triton_gemm_NTN(A, B, C, M, N, K):
         BLOCK_SIZE_M = BLOCK_M, 
         BLOCK_SIZE_N = BLOCK_N, 
         BLOCK_SIZE_K = BLOCK_K, 
-        GROUP_SIZE_M = 1, 
+        GROUP_SIZE_M = 4, 
         ACTIVATION = None, 
     )
     
