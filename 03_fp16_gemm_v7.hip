@@ -314,13 +314,14 @@ __device__ void s2r(__hip_bfloat16 *reg, __hip_bfloat16 *shared){
 }
 
 
+template <int HALF_ROW>
 __device__ void mma(float *C_reg, __hip_bfloat16 A_reg[32], __hip_bfloat16 B_reg[32]){
     using float16x4 = __attribute__((__vector_size__(4 * sizeof(_Float16)))) _Float16;
     using floatx4 = __attribute__((__vector_size__(4 * sizeof(float)))) float;
     // 32元素布局: 4 c_row * 2 k_iter * 4 elements = 32
     static_assert((3 * 2 + 1) * 4 + 3 < 32);  // max access index < 32
     #pragma unroll
-    for(int c_row = 0; c_row < 4; c_row++){
+    for(int c_row = HALF_ROW * 2; c_row < 2 * HALF_ROW + 2; c_row++){
         #pragma unroll
         for(int c_col = 0; c_col < 4; c_col++){
             #pragma unroll
@@ -344,7 +345,7 @@ __device__ void mma(float *C_reg, __hip_bfloat16 A_reg[32], __hip_bfloat16 B_reg
 // __attribute__((amdgpu_num_vgpr(128)))  // 限制VGPR到128，强制编译器用AGPR存累加器
 __launch_bounds__(THREAD_NUM, 2)
 __global__
-void _3_fp16_gemm_v6(
+void _3_fp16_gemm_v7(
   __hip_bfloat16* __restrict__ A_gmem,
   __hip_bfloat16* __restrict__ B_gmem,
   __hip_bfloat16* __restrict__ C_gmem
@@ -442,37 +443,42 @@ void _3_fp16_gemm_v6(
             s2r<0,0,0>(B_reg, B_smem_load_base);
             s2r<0,0,1>(B_reg, B_smem_load_base);
             s2r<0,0,0>(A_reg, A_smem_load_base);
-            s2r<0,0,1>(A_reg, A_smem_load_base);
             BARRIER(1);
 
-            mma(C_reg0, A_reg, B_reg);
+            mma<0>(C_reg0, A_reg, B_reg);
+
+            s2r<0,0,1>(A_reg, A_smem_load_base);
+            mma<1>(C_reg0, A_reg, B_reg);
             BARRIER(0);
             
             // 4 * float 4 read.
             s2r<1,0,0>(A_reg2, A_smem_load_base); 
-            s2r<1,0,1>(A_reg2, A_smem_load_base); 
             g2r(B_buff, B_gmem); 
 
             BARRIER(1);
-            mma(C_reg1, A_reg2, B_reg);
+            s2r<1,0,1>(A_reg2, A_smem_load_base); 
+            mma<0>(C_reg1, A_reg2, B_reg);
+            mma<1>(C_reg1, A_reg2, B_reg);
             BARRIER(0);
 
             // 4 * float 4 read.
             s2r<0,1,0>(B_reg, B_smem_load_base2);
             s2r<0,1,1>(B_reg, B_smem_load_base2);
             s2r<0,1,0>(A_reg, A_smem_load_base2);
-            s2r<0,1,1>(A_reg, A_smem_load_base2);
             // 4 * float 4 read.
 
             BARRIER(1);
-            mma(C_reg0, A_reg, B_reg);
+            mma<0>(C_reg0, A_reg, B_reg);
+            s2r<0,1,1>(A_reg, A_smem_load_base2);
+            mma<1>(C_reg0, A_reg, B_reg);
 
             BARRIER(0); 
             
             s2r<1,1,0>(A_reg2, A_smem_load_base2);
-            s2r<1,1,1>(A_reg2, A_smem_load_base2);
             BARRIER(1);
-            mma(C_reg1, A_reg2, B_reg); 
+            mma<0>(C_reg1, A_reg2, B_reg); 
+            s2r<1,1,1>(A_reg2, A_smem_load_base2);
+            mma<1>(C_reg1, A_reg2, B_reg); 
             BARRIER(0);
         } // s2r
 
@@ -515,21 +521,25 @@ void _3_fp16_gemm_v6(
             s2r<0,0,1>(B_reg, B_smem_load_base);
             s2r<0,0,0>(A_reg, A_smem_load_base);
             s2r<0,0,1>(A_reg, A_smem_load_base);
-            mma(C_reg0, A_reg, B_reg);
+            mma<0>(C_reg0, A_reg, B_reg);
+            mma<1>(C_reg0, A_reg, B_reg);
             
             s2r<1,0,0>(A_reg2, A_smem_load_base); 
             s2r<1,0,1>(A_reg2, A_smem_load_base); 
-            mma(C_reg1, A_reg2, B_reg);
+            mma<0>(C_reg1, A_reg2, B_reg);
+            mma<1>(C_reg1, A_reg2, B_reg);
 
             s2r<0,1,0>(B_reg, B_smem_load_base2);
             s2r<0,1,1>(B_reg, B_smem_load_base2);
             s2r<0,1,0>(A_reg, A_smem_load_base2);
             s2r<0,1,1>(A_reg, A_smem_load_base2);
-            mma(C_reg0, A_reg, B_reg);
+            mma<0>(C_reg0, A_reg, B_reg);
+            mma<1>(C_reg0, A_reg, B_reg);
             
             s2r<1,1,0>(A_reg2, A_smem_load_base2);
             s2r<1,1,1>(A_reg2, A_smem_load_base2);
-            mma(C_reg1, A_reg2, B_reg); 
+            mma<0>(C_reg1, A_reg2, B_reg); 
+            mma<1>(C_reg1, A_reg2, B_reg); 
 
         } // s2r
     }

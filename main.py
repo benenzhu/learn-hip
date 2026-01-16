@@ -422,6 +422,9 @@ def _03_fp16_gemm_v5(M, N, K):
 
 # ret = _03_fp16_gemm_v5(4864, 4096, 4096) 
 
+def cal_ratio(diff):
+    log("diff", diff)
+    log("diff ratio", (diff.abs() > 0.0001).sum().item() / diff.numel() * 100, "%")
 
 
 def _03_fp16_gemm_v6(M, N, K):
@@ -457,10 +460,32 @@ def _03_fp16_gemm_v6(M, N, K):
     
 
 # ret = _03_fp16_gemm_v6(256,256,64) 
-ret = _03_fp16_gemm_v6(4864, 4096, 4096) 
+# ret = _03_fp16_gemm_v6(4864, 4096, 4096) 
 # ret = _03_fp16_gemm_v6(4864, 4096, 8192) 
 
 
-def cal_ratio(diff):
-    log("diff", diff)
-    log("diff ratio", (diff.abs() > 0.0001).sum().item() / diff.numel() * 100, "%")
+
+def _03_fp16_gemm_v7(M, N, K):
+    A, B, C = get_inputNTN(M, N, K)
+    config = Bf16MatmulFullNTNConfig(
+        M=M, 
+        N=N, 
+        K=K, 
+        NUM_WARP_M=2,
+        NUM_WARP_N=4,
+        BLOCK_M=256,
+        BLOCK_N=256,
+        BLOCK_K=64)
+    matmul_kernel = get_kernel("_3_fp16_gemm_v7", "03_fp16_gemm_v7.hip", config)
+    TB_SIZE = config.get_tb_size()
+    GRID_SIZE = config.get_grid_size()
+    shared_mem=config.get_shared_mem()
+    log(f"{GRID_SIZE=}, {TB_SIZE=}, {shared_mem=}")
+    kernel_fn = lambda: matmul_kernel((GRID_SIZE,1,1), (TB_SIZE,1,1), (A, B, C, M, N, K))
+    ret = bench(kernel_fn, A, B, C)
+    os.system("python gen_pure.py _3_fp16_gemm_v7-hip-amdgcn-amd-amdhsa-gfx942:sramecc+:xnack-.s")
+    return ret
+    
+
+ret = _03_fp16_gemm_v7(4864, 4096, 4096) 
+
