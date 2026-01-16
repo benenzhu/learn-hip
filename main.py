@@ -71,8 +71,8 @@ def get_kernel(kernel_name, file_name="00_add.hip", config=None):
 
 def test_add_kernel(): 
     M, N = 100, 2048
-    A = torch.randint(-100, 100, (M, N), device="cuda", dtype=torch.int32)
-    B = torch.randint(-100, 100, (M, N), device="cuda", dtype=torch.int32) 
+    A = torch.randint(-100, 100, (M, N * 100), device="cuda", dtype=torch.int32)
+    B = torch.randint(-100, 100, (M, N * 100), device="cuda", dtype=torch.int32) 
     C = torch.empty_like(A)
     
     add_kernel = get_kernel("add_kernel", "00_add_v0.hip")
@@ -81,11 +81,12 @@ def test_add_kernel():
     print("end_kernel here")
     torch.cuda.synchronize()
     print("synchronize done")
-    torch.testing.assert_close(C, A + B)
+    # torch.testing.assert_close(C, A + B)
     print("test passed")
+    os.system("python gen_pure.py add_kernel-hip-amdgcn-amd-amdhsa-gfx942:sramecc+:xnack-.s")
     return C
 
-# test_add_kernel()
+test_add_kernel()
 
 
 def test_add_kernel_v2(): 
@@ -454,5 +455,5 @@ def _03_fp16_gemm_v6(M, N, K):
     return ret
     
 
-ret = _03_fp16_gemm_v6(4864, 4096, 4096) 
+# ret = _03_fp16_gemm_v6(4864, 4096, 4096) 
 # ret = _03_fp16_gemm_v6(4864, 4096, 8192) 

@@ -373,6 +373,7 @@ void _3_fp16_gemm_v6(
     constexpr int AB_tile_reg__32 = 64 * 32 / 64;
     __hip_bfloat16 B_reg[AB_tile_reg__32];
     __hip_bfloat16 A_reg[AB_tile_reg__32];
+    __hip_bfloat16 A_reg2[AB_tile_reg__32];
     for(int i = 0; i < C_reg_half__64; i++){
         C_reg0[i] = 0.0f;
         C_reg1[i] = 0.0f;
@@ -443,11 +444,11 @@ void _3_fp16_gemm_v6(
             BARRIER(0);
             
             // 4 * float 4 read.
-            s2r(A_reg, A_smem, 0, warp_id_m_0_1 * 2 + 1, lane_id); 
+            s2r(A_reg2, A_smem, 0, warp_id_m_0_1 * 2 + 1, lane_id); 
             g2r(B_buff, B_gmem); 
 
             BARRIER(1);
-            mma(C_reg1, A_reg, B_reg);
+            mma(C_reg1, A_reg2, B_reg);
             BARRIER(0);
 
             // 4 * float 4 read.
@@ -460,9 +461,9 @@ void _3_fp16_gemm_v6(
 
             BARRIER(0); 
             
-            s2r(A_reg, A_smem, 1, warp_id_m_0_1 * 2 + 1, lane_id);
+            s2r(A_reg2, A_smem, 1, warp_id_m_0_1 * 2 + 1, lane_id);
             BARRIER(1);
-            mma(C_reg1, A_reg, B_reg); 
+            mma(C_reg1, A_reg2, B_reg); 
             BARRIER(0);
         } // s2r
 
@@ -505,15 +506,15 @@ void _3_fp16_gemm_v6(
             s2r(A_reg, A_smem, 0, warp_id_m_0_1 * 2, lane_id);
             mma(C_reg0, A_reg, B_reg);
             
-            s2r(A_reg, A_smem, 0, warp_id_m_0_1 * 2 + 1, lane_id); 
-            mma(C_reg1, A_reg, B_reg);
+            s2r(A_reg2, A_smem, 0, warp_id_m_0_1 * 2 + 1, lane_id); 
+            mma(C_reg1, A_reg2, B_reg);
 
             s2r(B_reg, B_smem, 1, warp_id_n_0_3, lane_id);
             s2r(A_reg, A_smem, 1, warp_id_m_0_1 * 2, lane_id);
             mma(C_reg0, A_reg, B_reg);
             
-            s2r(A_reg, A_smem, 1, warp_id_m_0_1 * 2 + 1, lane_id);
-            mma(C_reg1, A_reg, B_reg); 
+            s2r(A_reg2, A_smem, 1, warp_id_m_0_1 * 2 + 1, lane_id);
+            mma(C_reg1, A_reg2, B_reg); 
 
         } // s2r
     }
