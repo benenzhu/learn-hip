@@ -1,5 +1,38 @@
 # learn hip asm and matmul through hiprtc.
 
+## BF16 GEMM OPT LOG: 
+
+- 03_v0: 
+    - use 512 thread
+    - simple load and calculate.
+    - pre register allocate.
+    - 204 VGPRs;
+    - Should have bank conflict problem and load problems.
+- [x] use float4 load
+- v0: 137 TF:
+- v1: 136 TF: use float2 load for shared memory, 
+    - not up. so prob mainly for the bank conflict problem?
+- v2: 
+    - 165 TF:  remove clear shared memory.
+    - 162 TF: use float2 load for shared memory.
+    - 382 TF: add swizzle for shared memory.  (+136%)
+    - 396 TF: add all unroll for params.
+- v3: 
+    - 400 TF: add XCD remap and L2 cache swizzle.  why so still so slow speed....
+- v4:
+    - have some register spill now? how to reduce them. 
+    - first write a tile like the hipkittens do now.
+    - 491 TF: use float4 for g2s and s2.
+- v5:
+    - 497 TF: add fast float2bfloat16... now ignore... maybe put into last.
+    - 535 TF: for open barrier... ping pong should have much more effect. learn it more.
+    - 602 TF: for close barrier...
+    - so shared memory interleave can do much more... 
+- v6: 
+    - simple refact. to reduce register pressure and used for later optimizations.
+- [ ] merge A_smem & B_smem to reduce 1 register.
+- [ ] small tile mma, add 8 wave ping-pong interleave.
+
 ## ref:
 gau's hip gemm: https://github.com/gau-nernst/learn-cuda/tree/main/02c_matmul_hip
 
@@ -58,35 +91,3 @@ as our shape: 32 * 32 * 64 & 32 * 32 * 32
 
 
 
-# OPT LOG: 
-
-- 03_v0: 
-    - use 512 thread
-    - simple load and calculate.
-    - pre register allocate.
-    - 204 VGPRs;
-    - Should have bank conflict problem and load problems.
-- [x] use float4 load
-- v0: 137 TF:
-- v1: 136 TF: use float2 load for shared memory, 
-    - not up. so prob mainly for the bank conflict problem?
-- v2: 
-    - 165 TF:  remove clear shared memory.
-    - 162 TF: use float2 load for shared memory.
-    - 382 TF: add swizzle for shared memory.  (+136%)
-    - 396 TF: add all unroll for params.
-- v3: 
-    - 400 TF: add XCD remap and L2 cache swizzle.  why so still so slow speed....
-- v4:
-    - have some register spill now? how to reduce them. 
-    - first write a tile like the hipkittens do now.
-    - 491 TF: use float4 for g2s and s2.
-- v5:
-    - 497 TF: add fast float2bfloat16... now ignore... maybe put into last.
-    - 535 TF: for open barrier... ping pong should have much more effect. learn it more.
-    - 602 TF: for close barrier...
-    - so shared memory interleave can do much more... 
-- v6: 
-    - simple refact. to reduce register pressure and used for later optimizations.
-- [ ] merge A_smem & B_smem to reduce 1 register.
-- [ ] small tile mma, add 8 wave ping-pong interleave.
