@@ -83,8 +83,8 @@ as our shape: 32 * 32 * 64 & 32 * 32 * 32
     - 491 TF: use float4 for g2s and s2.
 - v5:
     - 497 TF: add fast float2bfloat16... now ignore... maybe put into last.
-    - 602 TF: for close barrier...
     - 535 TF: for open barrier... ping pong should have much more effect. learn it more.
+    - 602 TF: for close barrier...
     - so shared memory interleave can do much more... 
 - v6: 
     - simple refact. to reduce register pressure and used for later optimizations.
