@@ -679,6 +679,7 @@ def my_assert_close(output, ref_output):
             log(f"{diff.abs().mean()=} < 1e-3, pass")
             return None
         log("diff", diff)
+        log("diff ratio", (diff.abs() > 0.0001).sum().item() / diff.numel() * 100, "%")
         # max_diff_idx = diff.abs().argmax()
         # max_diff_row = max_diff_idx // N
         # max_diff_col = max_diff_idx % N

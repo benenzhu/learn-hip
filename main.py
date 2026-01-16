@@ -86,7 +86,7 @@ def test_add_kernel():
     os.system("python gen_pure.py add_kernel-hip-amdgcn-amd-amdhsa-gfx942:sramecc+:xnack-.s")
     return C
 
-test_add_kernel()
+# test_add_kernel()
 
 
 def test_add_kernel_v2(): 
@@ -451,9 +451,16 @@ def _03_fp16_gemm_v6(M, N, K):
     # ) 
     # with profiler:
     ret = bench(kernel_fn, A, B, C)
+    os.system("python gen_pure.py _3_fp16_gemm_v6-hip-amdgcn-amd-amdhsa-gfx942:sramecc+:xnack-.s")
     # profiler.export_chrome_trace("03_fp16_gemm_v6_trace.json")
     return ret
     
 
-# ret = _03_fp16_gemm_v6(4864, 4096, 4096) 
+# ret = _03_fp16_gemm_v6(256,256,64) 
+ret = _03_fp16_gemm_v6(4864, 4096, 4096) 
 # ret = _03_fp16_gemm_v6(4864, 4096, 8192) 
+
+
+def cal_ratio(diff):
+    log("diff", diff)
+    log("diff ratio", (diff.abs() > 0.0001).sum().item() / diff.numel() * 100, "%")
