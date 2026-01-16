@@ -41,6 +41,11 @@
     - 602 TF: for close barrier...
     - 535 TF: for open barrier... ping pong should have much more effect. learn it more.
     - so shared memory interleave can do much more... 
+- v6: 
+    - simple refact. to reduce register pressure and used for later optimizations.
+
+- [ ] merge A_smem & B_smem
+- [ ] small tile mma, add 8 wave ping-pong interleave.
 */
 
 
