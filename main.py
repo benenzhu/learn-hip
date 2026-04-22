@@ -488,7 +488,7 @@ def _03_fp16_gemm_v7(M, N, K):
     
 
 # ret = _03_fp16_gemm_v7(4864, 4096, 4096)  # for mi300x
-ret = _03_fp16_gemm_v7(4096, 4096, 4096)  # for mi355x
+# ret = _03_fp16_gemm_v7(4096, 4096, 4096)  # for mi355x
 
 
 def _03_fp16_gemm_v8(M, N, K):
@@ -509,7 +509,7 @@ def _03_fp16_gemm_v8(M, N, K):
     log(f"{GRID_SIZE=}, {TB_SIZE=}, {shared_mem=}")
     kernel_fn = lambda: matmul_kernel((GRID_SIZE,1,1), (TB_SIZE,1,1), (A, B, C, M, N, K))
     ret = bench(kernel_fn, A, B, C)
-    os.system("python gen_pure.py _3_fp16_gemm_v7-hip-amdgcn-amd-amdhsa-gfx942:sramecc+:xnack-.s")
+    os.system("python gen_pure.py _3_fp16_gemm_v7-hip-amdgcn-amd-amdhsa-gfx950:sramecc+:xnack-.s")
     return ret
     
 

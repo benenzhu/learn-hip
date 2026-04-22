@@ -15,12 +15,13 @@ lines = new_lines
 new_lines = []
 start_with_Ldebug = False 
 for i in lines:
-    expect_list = [".Ldebug", ".Lloclists", "__hip_cuid", ".Lfunc_", ".Lrnglists_table", ".Lcu_begin", 
+    # Do not include ".Lfunc_": .Lfunc_begin0 etc. live in .text right before real
+    # instructions; skipping until the next col-0 "." line (e.g. .Ltmp0) drops the
+    # prologue (e.g. s_load_dwordx8) and other non-debug lines.
+    expect_list = [".Ldebug", ".Lloclists", "__hip_cuid", ".Lrnglists_table", ".Lcu_begin",
     "	.section	.rodata",
                    ".Linfo",
-                   ".Laddr",
-
-
+                   ".Laddr"
     ]
     new_start = False
     for j in expect_list:
@@ -111,4 +112,4 @@ with open(sys.argv[1] + "pure.s", "w", encoding="utf-8") as f2:
     for i in lines:
         f2.write(i)
                 
-
+print("write result to ", sys.argv[1] + "pure.s")

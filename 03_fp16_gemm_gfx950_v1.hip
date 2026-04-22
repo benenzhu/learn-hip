@@ -258,6 +258,62 @@ __device__ void llvm_amdgcn_raw_buffer_store_b64(uint64_t vdata, i32x4 srsrc, ui
 __device__ void llvm_amdgcn_raw_buffer_store_b128(__uint128_t vdata, i32x4 srsrc, uint32_t voffset, uint32_t soffset, uint32_t coherency)
     __asm("llvm.amdgcn.raw.buffer.store.i128");
 
+// Direct global -> LDS buffer load (gfx940+; gfx950 supports widths 4 / 12 / 16 B).
+// Per-lane payload of `size` bytes lands at LDS[ m0 + lane * size ], where m0 is set
+// from `lds_ptr` (must be wave-uniform). Each lane provides its own `voffset`.
+// We exploit this to put the swizzle on the gmem-side voffset (per-lane VGPR) so the
+// natural per-lane LDS layout matches the same swizzled layout produced by the old
+// g2r + r2s pair — `s2r` and the pre-computed `*_smem_load_base` arrays don't change.
+__device__ void llvm_amdgcn_raw_buffer_load_lds(
+    i32x4 srsrc,
+    __attribute__((address_space(3))) uint32_t* lds_ptr,
+    uint32_t size,
+    uint32_t voffset,
+    uint32_t soffset,
+    uint32_t offset,
+    uint32_t aux) __asm("llvm.amdgcn.raw.buffer.load.lds");
+
+// Async global -> LDS for one BLOCK_M x BLOCK_K (or BLOCK_N x BLOCK_K) tile.
+// Replaces the old g2r(...) + r2s(...) pair, eliminating A_buff/B_buff VGPR storage.
+// Completion is tracked by vmcnt; caller does s_waitcnt vmcnt(0) + __syncthreads
+// before consuming the loaded tile.
+__device__ __forceinline__ void g2s_async(__hip_bfloat16 *shared_mem, __hip_bfloat16 *gmem) {
+    constexpr int load_bytes    = 16;                       // gfx950 buffer_load_b128 lds
+    constexpr int multiplier__8 = sizeof(float4) / sizeof(__hip_bfloat16);  // 8 bf16/lane
+    constexpr int total_bf16    = BLOCK_M * BLOCK_K;        // 16384 (32 KiB)
+    constexpr int total_issues  = total_bf16 / THREAD_NUM / multiplier__8;  // 4
+
+    const int row_stride_bytes = K * sizeof(__hip_bfloat16);
+    const int total_bytes      = K * 256 * sizeof(__hip_bfloat16);
+    i32x4 srsrc = make_srsrc(gmem, total_bytes, row_stride_bytes);
+
+    // wave_id forced into scalar reg so the lds-pointer arithmetic stays uniform.
+    const int wave_id = __builtin_amdgcn_readfirstlane(threadIdx.x / 64);
+
+    #pragma unroll
+    for (int i = 0; i < total_issues; i++) {
+        // This thread's natural LDS chunk (in bf16 element index, before swizzle).
+        const int natural_lds_elt = i * THREAD_NUM * multiplier__8 + threadIdx.x * multiplier__8;
+        // Pre-swizzle to determine which gmem element this thread must fetch so that
+        // the wave-coherent LDS write reproduces the swizzled layout.
+        const int gmem_elt = swizzle<3,3,3>(natural_lds_elt);
+        const int row_idx  = gmem_elt / BLOCK_K;
+        const int col_idx  = gmem_elt % BLOCK_K;
+        const uint32_t voffset = (row_idx * K + col_idx) * sizeof(__hip_bfloat16);
+
+        // Wave-uniform LDS base for this issue. Hardware adds lane * 16 B per lane.
+        __hip_bfloat16* lds_wave_base =
+            shared_mem + i * THREAD_NUM * multiplier__8 + wave_id * 64 * multiplier__8;
+
+        llvm_amdgcn_raw_buffer_load_lds(
+            srsrc,
+            (__attribute__((address_space(3))) uint32_t*)(uint64_t)lds_wave_base,
+            load_bytes,
+            voffset,
+            0, 0, 0);
+    }
+}
+
 __device__ void g2r(__hip_bfloat16 *reg, __hip_bfloat16 *gmem) { // first tile g2s...
     using load_type = float4;
     constexpr int multiplier__8 = sizeof(load_type) / sizeof(__hip_bfloat16);
@@ -316,23 +372,24 @@ __device__ void s2r(__hip_bfloat16 *reg, __hip_bfloat16 *shared){
 
 template <int HALF_ROW>
 __device__ void mma(float *C_reg, __hip_bfloat16 A_reg[32], __hip_bfloat16 B_reg[32]){
-    using float16x4 = __attribute__((__vector_size__(4 * sizeof(_Float16)))) _Float16;
-    using floatx4 = __attribute__((__vector_size__(4 * sizeof(float)))) float;
-    // 32元素布局: 4 c_row * 2 k_iter * 4 elements = 32
-    static_assert((3 * 2 + 1) * 4 + 3 < 32);  // max access index < 32
+    // gfx950 (MI355X) K=32 bf16 MFMA — one call replaces the prior K=16 _1k pair.
+    // Operand layout per lane: float16x8 (8 bf16). The existing s2r packing already
+    // supplies 8 bf16/lane via two ds_read_b128 (s2r<...,half=0> + s2r<...,half=1>),
+    // so A_reg / B_reg layout is unchanged — only the inner k-loop collapses.
+    // 32-element register layout now: 4 c_row * 8 elements = 32 (instead of 4*2*4).
+    using float16x8 = __attribute__((__vector_size__(8 * sizeof(_Float16)))) _Float16;
+    using floatx4   = __attribute__((__vector_size__(4 * sizeof(float))))    float;
+    static_assert(3 * 8 + 7 < 32);  // max bf16 index < 32
     #pragma unroll
     for(int c_row = HALF_ROW * 2; c_row < 2 * HALF_ROW + 2; c_row++){
         #pragma unroll
         for(int c_col = 0; c_col < 4; c_col++){
-            #pragma unroll
-            for(int k = 0; k < 2; k++){
-                *((floatx4*)(C_reg) + c_row * 4 + c_col)
-                = __builtin_amdgcn_mfma_f32_16x16x16bf16_1k(
-                    *((float16x4*)(A_reg) + c_row * 2 + k),  // 32元素: c_row * 2
-                    *((float16x4*)(B_reg) + c_col * 2 + k),  // 32元素: c_col * 2
-                    *((floatx4*)(C_reg) + c_row * 4 + c_col),
-                    0, 0, 0);
-            }
+            *((floatx4*)(C_reg) + c_row * 4 + c_col)
+            = __builtin_amdgcn_mfma_f32_16x16x32_bf16(
+                *((float16x8*)(A_reg) + c_row),   // 8 bf16/lane = K=32 in one MFMA
+                *((float16x8*)(B_reg) + c_col),
+                *((floatx4*)(C_reg) + c_row * 4 + c_col),
+                0, 0, 0);
         }
     }
 }
@@ -341,11 +398,63 @@ __device__ void mma(float *C_reg, __hip_bfloat16 A_reg[32], __hip_bfloat16 B_reg
 #define BARRIER(prio) __builtin_amdgcn_s_barrier(); __builtin_amdgcn_sched_barrier(0); __builtin_amdgcn_s_setprio(prio);
 #define BARRIER(prio)
 
+
+// ----------------------------------------------------------------------------
+// compute_tile<BUF>: pure s2r + mma over one BLOCK_K. No global prefetch — the
+// async global->LDS load for the *next* tile is issued from the main loop, in
+// parallel with this body, and tracked via vmcnt.
+// BUF is a constexpr buffer index into the pre-computed swizzled base-pointer
+// arrays; ds_read_b128 stays a constant-offset load.
+// ----------------------------------------------------------------------------
+template <int BUF>
+__device__ __forceinline__ void compute_tile(
+    float* C_reg0, float* C_reg1,
+    __hip_bfloat16* A_reg, __hip_bfloat16* A_reg2, __hip_bfloat16* B_reg,
+    __hip_bfloat16* const A_ld [2], __hip_bfloat16* const A_ld2[2],
+    __hip_bfloat16* const B_ld [2], __hip_bfloat16* const B_ld2[2])
+{
+    s2r<0,0,0>(B_reg, B_ld[BUF]);
+    s2r<0,0,1>(B_reg, B_ld[BUF]);
+    s2r<0,0,0>(A_reg, A_ld[BUF]);
+    BARRIER(1);
+
+    mma<0>(C_reg0, A_reg, B_reg);
+
+    s2r<0,0,1>(A_reg, A_ld[BUF]);
+    mma<1>(C_reg0, A_reg, B_reg);
+    BARRIER(0);
+
+    s2r<1,0,0>(A_reg2, A_ld[BUF]);
+    BARRIER(1);
+    s2r<1,0,1>(A_reg2, A_ld[BUF]);
+    mma<0>(C_reg1, A_reg2, B_reg);
+    mma<1>(C_reg1, A_reg2, B_reg);
+    BARRIER(0);
+
+    s2r<0,1,0>(B_reg, B_ld2[BUF]);
+    s2r<0,1,1>(B_reg, B_ld2[BUF]);
+    s2r<0,1,0>(A_reg, A_ld2[BUF]);
+
+    BARRIER(1);
+    mma<0>(C_reg0, A_reg, B_reg);
+    s2r<0,1,1>(A_reg, A_ld2[BUF]);
+    mma<1>(C_reg0, A_reg, B_reg);
+
+    BARRIER(0);
+
+    s2r<1,1,0>(A_reg2, A_ld2[BUF]);
+    BARRIER(1);
+    mma<0>(C_reg1, A_reg2, B_reg);
+    s2r<1,1,1>(A_reg2, A_ld2[BUF]);
+    mma<1>(C_reg1, A_reg2, B_reg);
+    BARRIER(0);
+}
+
 // __attribute__((amdgpu_flat_work_group_size(512, 512)))
 // __attribute__((amdgpu_num_vgpr(128)))  // 限制VGPR到128，强制编译器用AGPR存累加器
 __launch_bounds__(THREAD_NUM, 2)
 __global__
-void _3_fp16_gemm_v7(
+void _3_fp16_gemm_gfx950_v1(
   __hip_bfloat16* __restrict__ A_gmem,
   __hip_bfloat16* __restrict__ B_gmem,
   __hip_bfloat16* __restrict__ C_gmem
@@ -360,9 +469,13 @@ void _3_fp16_gemm_v7(
     using float16x4 = __attribute__((__vector_size__(4 * sizeof(_Float16)))) _Float16;
     using floatx4 = __attribute__((__vector_size__(4 * sizeof(float)))) float;
     
-    __shared__ __hip_bfloat16 A_smem[BLOCK_M * BLOCK_K];
-    __shared__ __hip_bfloat16 B_smem[BLOCK_N * BLOCK_K];
-    constexpr int total_shared_size_65536 = sizeof(A_smem) + sizeof(B_smem);
+    // Double-buffered SMEM for gfx950: total 131,072 B (fits in ~160 KB/CU LDS).
+    // Declared as [2][...] (not flat [2 * STRIDE]) so the two halves are distinct
+    // sub-objects — LLVM can prove producer r2s into A_smem[1] is alias-independent
+    // from consumer s2r out of A_smem[0], enabling reordering across the inner loop.
+    __shared__ __hip_bfloat16 A_smem[2][BLOCK_M * BLOCK_K];
+    __shared__ __hip_bfloat16 B_smem[2][BLOCK_N * BLOCK_K];
+    constexpr int total_shared_size_131072 = sizeof(A_smem) + sizeof(B_smem);
     
     constexpr int C_reg_half__64 = BLOCK_M * BLOCK_N / 512 / 2;
     constexpr int warp_reg_num__8192 = C_reg_half__64 * 2 * 64;
@@ -410,138 +523,93 @@ void _3_fp16_gemm_v7(
     A_gmem += BM_idx * K;
     B_gmem += BN_idx * K;
 
-    g2s(A_smem, A_gmem);
-    g2s(B_smem, B_gmem);
+    // Prologue: async-load tile 0 directly into LDS buf 0 (no register staging).
+    g2s_async(A_smem[0], A_gmem);
+    g2s_async(B_smem[0], B_gmem);
+    asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
     __syncthreads();
     const int warp_row = __builtin_amdgcn_readfirstlane(threadIdx.x / 64 / 4);
     if(warp_row == 1){
         BARRIER(0);
     }
-    
-    __hip_bfloat16* A_smem_load_base = A_smem + swizzle<3,3,3>((warp_id_m_0_1 * 2 * 64 +threadIdx.x % 16) * BLOCK_K + lane_id / 16 * 8);
-    __hip_bfloat16* A_smem_load_base2 = A_smem + swizzle<3,3,3>((warp_id_m_0_1 * 2 * 64 +threadIdx.x % 16) * BLOCK_K + lane_id / 16 * 8 + 32);
-    __hip_bfloat16* B_smem_load_base = B_smem + swizzle<3,3,3>((warp_id_n_0_3 * 64 + threadIdx.x % 16) * BLOCK_K + lane_id / 16 * 8);
-    __hip_bfloat16* B_smem_load_base2 = B_smem + swizzle<3,3,3>((warp_id_n_0_3 * 64 + threadIdx.x % 16) * BLOCK_K + lane_id / 16 * 8 + 32);
-    
-    constexpr int total_iter_num = cdiv(K, BLOCK_K);
-    for(int iter = 0; iter < total_iter_num - 1; iter++){   
-        constexpr int shared_mem_size = BLOCK_M * BLOCK_K / THREAD_NUM; 
 
-        __hip_bfloat16 A_buff[shared_mem_size];
-        __hip_bfloat16 B_buff[shared_mem_size];
-        constexpr int buff_reg_size___32 = sizeof(A_buff) / 4 + sizeof(B_buff) / 4;
+    // Pre-computed swizzled base pointers, one per buffer. Each `compute_tile<BUF>`
+    // selects with a constexpr index so ds_read_b128 keeps a constant offset
+    // (no swizzle XOR in the inner loop).
+    const int A_swz_lo = swizzle<3,3,3>((warp_id_m_0_1 * 2 * 64 + threadIdx.x % 16) * BLOCK_K + lane_id / 16 * 8);
+    const int A_swz_hi = swizzle<3,3,3>((warp_id_m_0_1 * 2 * 64 + threadIdx.x % 16) * BLOCK_K + lane_id / 16 * 8 + 32);
+    const int B_swz_lo = swizzle<3,3,3>((warp_id_n_0_3      * 64 + threadIdx.x % 16) * BLOCK_K + lane_id / 16 * 8);
+    const int B_swz_hi = swizzle<3,3,3>((warp_id_n_0_3      * 64 + threadIdx.x % 16) * BLOCK_K + lane_id / 16 * 8 + 32);
+
+    __hip_bfloat16* A_smem_load_base [2] = { A_smem[0] + A_swz_lo, A_smem[1] + A_swz_lo };
+    __hip_bfloat16* A_smem_load_base2[2] = { A_smem[0] + A_swz_hi, A_smem[1] + A_swz_hi };
+    __hip_bfloat16* B_smem_load_base [2] = { B_smem[0] + B_swz_lo, B_smem[1] + B_swz_lo };
+    __hip_bfloat16* B_smem_load_base2[2] = { B_smem[0] + B_swz_hi, B_smem[1] + B_swz_hi };
+    
+    // Double-buffered main loop with direct global->LDS async copy.
+    // Pattern (per pair of tiles):
+    //   issue async load tile (2*iter+1) -> buf 1   (in flight, vmcnt-tracked)
+    //   compute_tile<0> from buf 0                  (overlaps with the async load)
+    //   waitcnt + barrier
+    //   issue async load tile (2*iter+2) -> buf 0
+    //   compute_tile<1> from buf 1                  (overlaps with the async load)
+    //   waitcnt + barrier
+    // No A_buff / B_buff register staging — the spill goes away.
+    constexpr int total_iter_num = cdiv(K, BLOCK_K);
+    static_assert(total_iter_num >= 2 && total_iter_num % 2 == 0,
+                  "loop unroll-by-2 requires an even tile count");
+    constexpr int loop_iters = (total_iter_num - 2) / 2;   // last 2 tiles handled in tail
+
+    for (int iter = 0; iter < loop_iters; iter++) {
+        // ---- tile (2*iter): compute from buf 0, async-prefetch next into buf 1 ----
         A_gmem += BLOCK_K;
         B_gmem += BLOCK_K;
-        
+        g2s_async(A_smem[1], A_gmem);
+        g2s_async(B_smem[1], B_gmem);
+        compute_tile<0>(C_reg0, C_reg1, A_reg, A_reg2, B_reg,
+                        A_smem_load_base, A_smem_load_base2,
+                        B_smem_load_base, B_smem_load_base2);
+        asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
+        __syncthreads();
 
-        { // s2r
-            //                                                 分了4个块，  64个warp.
-            
-            // 4 * float 4 read.
-            g2r(A_buff, A_gmem);
-            // 4 * float 4 read per.
-            s2r<0,0,0>(B_reg, B_smem_load_base);
-            s2r<0,0,1>(B_reg, B_smem_load_base);
-            s2r<0,0,0>(A_reg, A_smem_load_base);
-            BARRIER(1);
+        // ---- tile (2*iter+1): compute from buf 1, async-prefetch next into buf 0 ----
+        A_gmem += BLOCK_K;
+        B_gmem += BLOCK_K;
+        g2s_async(A_smem[0], A_gmem);
+        g2s_async(B_smem[0], B_gmem);
+        compute_tile<1>(C_reg0, C_reg1, A_reg, A_reg2, B_reg,
+                        A_smem_load_base, A_smem_load_base2,
+                        B_smem_load_base, B_smem_load_base2);
+        asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
+        __syncthreads();
+    } // main loop
 
-            mma<0>(C_reg0, A_reg, B_reg);
-
-            s2r<0,0,1>(A_reg, A_smem_load_base);
-            mma<1>(C_reg0, A_reg, B_reg);
-            BARRIER(0);
-            
-            // 4 * float 4 read.
-            s2r<1,0,0>(A_reg2, A_smem_load_base); 
-            g2r(B_buff, B_gmem); 
-
-            BARRIER(1);
-            s2r<1,0,1>(A_reg2, A_smem_load_base); 
-            mma<0>(C_reg1, A_reg2, B_reg);
-            mma<1>(C_reg1, A_reg2, B_reg);
-            BARRIER(0);
-
-            // 4 * float 4 read.
-            s2r<0,1,0>(B_reg, B_smem_load_base2);
-            s2r<0,1,1>(B_reg, B_smem_load_base2);
-            s2r<0,1,0>(A_reg, A_smem_load_base2);
-            // 4 * float 4 read.
-
-            BARRIER(1);
-            mma<0>(C_reg0, A_reg, B_reg);
-            s2r<0,1,1>(A_reg, A_smem_load_base2);
-            mma<1>(C_reg0, A_reg, B_reg);
-
-            BARRIER(0); 
-            
-            s2r<1,1,0>(A_reg2, A_smem_load_base2);
-            BARRIER(1);
-            mma<0>(C_reg1, A_reg2, B_reg); 
-            s2r<1,1,1>(A_reg2, A_smem_load_base2);
-            mma<1>(C_reg1, A_reg2, B_reg); 
-            BARRIER(0);
-        } // s2r
-
-        // asm volatile("" ::: "memory");  // 编译器屏障，阻止重排
-        // asm volatile("s_waitcnt lgkmcnt(0)");
-        // asm volatile("s_waitcnt vmcnt(0)");
-        // __builtin_amdgcn_s_barrier();
-        // __builtin_amdgcn_sched_barrier(0);
-        {
-            BARRIER(0);
-            __syncthreads();
-            r2s(A_smem, A_buff);
-            r2s(B_smem, B_buff); 
-            __syncthreads();
-            BARRIER(0);
-        }
-        // asm volatile("" ::: "memory");  // 编译器屏障，阻止重排
-        // asm volatile("s_waitcnt lgkmcnt(0)");
-        // asm volatile("s_waitcnt vmcnt(0)");
-        // __builtin_amdgcn_s_barrier();
-        // __builtin_amdgcn_sched_barrier(0);
-    } // main loop for k_iter in ...
-    if(warp_row == 0){
+    if (warp_row == 0) {
         BARRIER(0);
     }
-    
-    // asm volatile("" ::: "memory");  // 编译器屏障，阻止重排
-    // asm volatile("s_waitcnt lgkmcnt(0)");
-    // asm volatile("s_waitcnt vmcnt(0)");
-    // __builtin_amdgcn_s_barrier();
-    // __builtin_amdgcn_sched_barrier(0);
+
+    // ---- Tail: last 2 tiles (indices total-2 and total-1) ----
+    // Tile total-2 sits in buf 0; async-prefetch tile total-1 into buf 1 while
+    // computing total-2, then drain tile total-1 from buf 1 with no further prefetch.
     {
-        { // s2r
-            constexpr int AB_tile_reg__32 = 64 * 32 / 64;
-            //                                                 分了4个块，  64个warp.
-            // __hip_bfloat16 B_reg[AB_tile_reg__32];
-            // __hip_bfloat16 A_reg[AB_tile_reg__32];
-            
-            s2r<0,0,0>(B_reg, B_smem_load_base);
-            s2r<0,0,1>(B_reg, B_smem_load_base);
-            s2r<0,0,0>(A_reg, A_smem_load_base);
-            s2r<0,0,1>(A_reg, A_smem_load_base);
-            mma<0>(C_reg0, A_reg, B_reg);
-            mma<1>(C_reg0, A_reg, B_reg);
-            
-            s2r<1,0,0>(A_reg2, A_smem_load_base); 
-            s2r<1,0,1>(A_reg2, A_smem_load_base); 
-            mma<0>(C_reg1, A_reg2, B_reg);
-            mma<1>(C_reg1, A_reg2, B_reg);
+        A_gmem += BLOCK_K;
+        B_gmem += BLOCK_K;
+        g2s_async(A_smem[1], A_gmem);
+        g2s_async(B_smem[1], B_gmem);
+        compute_tile<0>(C_reg0, C_reg1, A_reg, A_reg2, B_reg,
+                        A_smem_load_base, A_smem_load_base2,
+                        B_smem_load_base, B_smem_load_base2);
+        // Stop the scheduler from hoisting compute_tile<1>'s ds_read_b128s into
+        // compute_tile<0>'s tail MFMAs — that's what was stretching one C-slot's
+        // live range across the boundary and forcing the spill.
+        // __builtin_amdgcn_sched_barrier(0);
+        asm volatile("s_waitcnt vmcnt(0)" ::: "memory");
+        __syncthreads();
+        // __builtin_amdgcn_sched_barrier(0);
 
-            s2r<0,1,0>(B_reg, B_smem_load_base2);
-            s2r<0,1,1>(B_reg, B_smem_load_base2);
-            s2r<0,1,0>(A_reg, A_smem_load_base2);
-            s2r<0,1,1>(A_reg, A_smem_load_base2);
-            mma<0>(C_reg0, A_reg, B_reg);
-            mma<1>(C_reg0, A_reg, B_reg);
-            
-            s2r<1,1,0>(A_reg2, A_smem_load_base2);
-            s2r<1,1,1>(A_reg2, A_smem_load_base2);
-            mma<0>(C_reg1, A_reg2, B_reg); 
-            mma<1>(C_reg1, A_reg2, B_reg); 
-
-        } // s2r
+        compute_tile<1>(C_reg0, C_reg1, A_reg, A_reg2, B_reg,
+                        A_smem_load_base, A_smem_load_base2,
+                        B_smem_load_base, B_smem_load_base2);
     }
     // asm volatile("" ::: "memory");  // 编译器屏障，阻止重排
     // asm volatile("s_waitcnt lgkmcnt(0)");
