@@ -265,6 +265,7 @@ def _nvrtc_compile(
     
     # Print compilation log if not empty (e.g., -Rpass-analysis output)
     if compile_log.value and compile_log.value.strip():
+        log(f"{options=}")
         log(f"Compilation log:\n{compile_log.value.decode()}")
 
     # Get PTX
