@@ -1,9 +1,20 @@
+import os
+# FlyDSL: dump every compile stage (incl. final .s) and skip the disk-cache so
+# edits to the kernel source always retrigger codegen. Must be set BEFORE flydsl
+# is imported anywhere.
+os.environ.setdefault("FLYDSL_DUMP_IR", "1")
+os.environ.setdefault("FLYDSL_RUNTIME_ENABLE_CACHE", "0")
+
 from dataclasses import dataclass
 import torch
+if torch.cuda.is_available() and torch.cuda.device_count() > 1:
+  best = max(range(torch.cuda.device_count()),
+            key=lambda i: torch.cuda.mem_get_info(i)[0])      
+  torch.cuda.set_device(best)
+  print(f"[main] Selected GPU {best} (most free VRAM) used: {308556070912 - torch.cuda.mem_get_info(best)[0]}")
 import time
 import importlib
 import rtc
-import os
 import log as logmodule
 log = logmodule.log
 # os.environ["ROCPROF_COUNTER_COLLECTION"] = "1"
@@ -536,5 +547,41 @@ def _04_nt_gemm_flydsl(M, N, K):
     return ret
 
 
-ret = _04_nt_gemm_flydsl(4096, 4096, 4096)  # FlyDSL NT GEMM, gfx950
+# ret = _04_nt_gemm_flydsl(4096, 4096, 4096)  # FlyDSL NT GEMM, gfx950 (v1, layout style)
+
+
+def _04_nt_gemm_flydsl_v2(M, N, K):
+    """FlyDSL HIP-style imperative port of 03_fp16_gemm_gfx950_v1.hip — K=32 native.
+    Set FLYDSL_DUMP_IR=1 to also produce 04_nt_gemm_flyDsl_gfx950_v2.spure.s
+    alongside the HIP .spure.s files."""
+    import importlib.util, glob, shutil
+    spec = importlib.util.spec_from_file_location(
+        "nt_gemm_flydsl_gfx950_v2", "04_nt_gemm_flyDsl_gfx950_v2.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    A, B, C = get_inputNTN(M, N, K)
+    mod.run(M, N, K, A, B, C)
+    log(f"GRID=({M//mod.BLOCK_M},{N//mod.BLOCK_N},1), TB={mod.BLOCK_THREADS}")
+    kernel_fn = lambda: mod.run(M, N, K, A, B, C)
+    ret = bench(kernel_fn, A, B, C)
+
+    # Pipe the FlyDSL final ISA through gen_pure.py if FLYDSL_DUMP_IR was set.
+    # FlyDSL writes per-kernel subdirs under FLYDSL_DUMP_DIR (default ~/.flydsl/debug).
+    dump_root = os.environ.get(
+        "FLYDSL_DUMP_DIR", os.path.expanduser("~/.flydsl/debug")
+    )
+    isa_glob = os.path.join(dump_root, "nt_gemm_bf16_*", "17_final_isa.s")
+    matches = sorted(glob.glob(isa_glob), key=os.path.getmtime, reverse=True)
+    if matches:
+        src = matches[0]
+        dst = "04_nt_gemm_flyDsl_gfx950_v2.s"
+        shutil.copyfile(src, dst)
+        os.system(f"python gen_pure.py {dst}")
+        log(f"FlyDSL ASM: {dst}  (cleaned: {dst}pure.s)")
+    return ret
+
+
+ret = _04_nt_gemm_flydsl_v2(4096, 4096, 4096)  # FlyDSL NT GEMM v2, K=32 imperative
 
