@@ -583,5 +583,5 @@ def _04_nt_gemm_flydsl_v2(M, N, K):
     return ret
 
 
-ret = _04_nt_gemm_flydsl_v2(4096, 4096, 4096)  # FlyDSL NT GEMM v2, K=32 imperative
+ret = _04_nt_gemm_flydsl_v2(8192, 8192, 8192)  # FlyDSL NT GEMM v2 — match HK 8192³ benchmark
 

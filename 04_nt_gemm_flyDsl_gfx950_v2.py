@@ -78,6 +78,16 @@ def swizzle_xor16(row, col_in_bytes, k_blocks16):
     return col_in_bytes ^ ((row % k_blocks16) * 16)
 
 
+def s_waitcnt_vmcnt0():
+    """Inline asm: drain pending vmem ops (buffer_load_*_lds) only.
+    Unlike `rocdl.s_waitcnt(0)` which drains vmcnt + lgkmcnt + expcnt all at once,
+    this lets in-flight ds_read latency continue past the barrier — matches the
+    HipKittens pattern (no `vmcnt(0) lgkmcnt(0)` full drains in the inner loop)."""
+    llvm.InlineAsmOp(
+        None, [], "s_waitcnt vmcnt(0)", "", has_side_effects=True
+    )
+
+
 @functools.lru_cache(maxsize=16)
 def compile_nt_gemm(m: int, n: int, k: int):
     assert m % BLOCK_M == 0 and n % BLOCK_N == 0 and k % BLOCK_K == 0
@@ -120,10 +130,52 @@ def compile_nt_gemm(m: int, n: int, k: int):
         tid = fx.Int32(fx.thread_idx.x)
         wid = tid // WARP_SIZE
         w_tid = tid % WARP_SIZE
-        block_m_idx = fx.block_idx.x
-        block_n_idx = fx.block_idx.y
-        m_offset = fx.Index(block_m_idx * BLOCK_M)
-        n_offset = fx.Index(block_n_idx * BLOCK_N)
+
+        # ---- XCD remap + L2 group-M swizzle (matches HIP v1) ----
+        # MI355X has 8 XCDs; chunking blockIdx by NUM_XCDS keeps consecutive WGs on
+        # the same chiplet (less cross-XCD traffic). Then group_M shuffles WGs into
+        # WGM-wide M-strips for L2 locality on the A operand.
+        # Launch is 1D-flat (grid_x = num_pid_m * num_pid_n, grid_y/z=1) per launch().
+        NUM_XCDS = 8
+        WGM = 4
+        CHUNK = 64                            # matches HK's chunk_size for chiplet remap
+        num_pid_m = m // BLOCK_M
+        num_pid_n = n // BLOCK_N
+        NUM_WGS = num_pid_m * num_pid_n
+
+        wgid_orig = fx.Int32(fx.block_idx.x)
+        # chiplet_transform_chunked: keep wgid mod NUM_XCDS == xcd, but reshuffle
+        # local order so a chunk of CHUNK consecutive (after-remap) wgids all land
+        # on the same XCD.
+        xcd = wgid_orig % NUM_XCDS
+        block_size = NUM_XCDS * CHUNK
+        limit = (NUM_WGS // block_size) * block_size
+        local_pid    = wgid_orig // NUM_XCDS
+        chunk_idx    = local_pid // CHUNK
+        pos_in_chunk = local_pid %  CHUNK
+        remapped     = chunk_idx * block_size + xcd * CHUNK + pos_in_chunk
+        # Past the last full block: leave as-is (HIP v1 does the same).
+        wgid = arith.select(
+            arith.cmpi(arith.CmpIPredicate.ult, fx.Index(wgid_orig), fx.Index(limit)),
+            remapped, wgid_orig,
+        )
+
+        # L2 group-M: cluster WGM consecutive M tiles together for better A-row reuse.
+        num_wgid_in_group = WGM * num_pid_n
+        group_id          = wgid // num_wgid_in_group
+        first_pid_m       = group_id * WGM
+        # group_size_m = min(num_pid_m - first_pid_m, WGM) — handle ragged tail.
+        group_size_m_full = num_pid_m - first_pid_m
+        group_size_m      = arith.select(
+            arith.cmpi(arith.CmpIPredicate.slt, fx.Index(group_size_m_full), fx.Index(WGM)),
+            group_size_m_full, fx.Int32(WGM),
+        )
+        wgid_in_group = wgid % num_wgid_in_group
+        pid_m = first_pid_m + (wgid_in_group % group_size_m)
+        pid_n = wgid_in_group // group_size_m
+
+        m_offset = fx.Index(pid_m * BLOCK_M)
+        n_offset = fx.Index(pid_n * BLOCK_N)
         k_blocks16 = fx.Int32((BLOCK_K * DTYPE_BYTES) // 16)   # = 8 (BK=64 bytes/16B chunk)
 
         warp_m_idx = wid // BLOCK_N_WARPS * WARP_M             # 0 or 128
@@ -229,10 +281,15 @@ def compile_nt_gemm(m: int, n: int, k: int):
             return b_frags
 
         # --------- one BLOCK_K worth of MFMA accumulation ---------
+        # Wave ping-pong: per-ii bursts of 4 MFMAs, with rocdl.s_barrier() between
+        # them. The CTA-wide s_barrier serializes MFMA issue across the 8 waves —
+        # while one wave runs its burst, others wait, keeping the MFMA issue port
+        # saturated (no inter-wave contention). Mirrors HipKittens' 32× s_barrier.
         def block_mma_sync(a_frags, b_frags, c_frags):
             for kk in range_constexpr(WARP_K_STEPS):
                 for ii in range_constexpr(WARP_M_STEPS):
                     a_frag = a_frags[kk * WARP_M_STEPS + ii]
+                    rocdl.s_setprio(1)
                     for jj in range_constexpr(WARP_N_STEPS):
                         b_frag = b_frags[kk * WARP_N_STEPS + jj]
                         c_idx = ii * WARP_N_STEPS + jj
@@ -240,12 +297,14 @@ def compile_nt_gemm(m: int, n: int, k: int):
                             T.vec(WMMA_C_FRAG_VALUES, T.f32),
                             a_frag, b_frag, c_frags[c_idx], 0, 0, 0,
                         ).res
+                    rocdl.s_setprio(0)
+                    rocdl.sched_barrier(0)   # per-ii burst (4 MFMAs)
 
         # ============== Prologue: load tile 0 into stage 0 ==============
         ks_begin = arith.constant(0, type=T.i32)
         ldg_sts_a_async(ks_begin, 0)
         ldg_sts_b_async(ks_begin, 0)
-        rocdl.s_waitcnt(0)
+        s_waitcnt_vmcnt0()
         gpu.barrier()
         a_frags = lds_matrix_a(0)
         b_frags = lds_matrix_b(0)
@@ -265,7 +324,7 @@ def compile_nt_gemm(m: int, n: int, k: int):
             ldg_sts_a_async(k_offset + BLOCK_K, next_stage)
             ldg_sts_b_async(k_offset + BLOCK_K, next_stage)
             block_mma_sync(a_frags, b_frags, c_frags)
-            rocdl.s_waitcnt(0)
+            s_waitcnt_vmcnt0()
             gpu.barrier()
 
             a_frags_next = lds_matrix_a(next_stage)
@@ -310,8 +369,9 @@ def compile_nt_gemm(m: int, n: int, k: int):
         with ir.InsertionPoint(ctx.gpu_module_body):
             allocator.finalize()
         gemm_kernel._func.__name__ = KERNEL_NAME
+        # 1D-flat grid so the XCD remap + L2 swizzle can shuffle a single wgid.
         gemm_kernel(A, B, C).launch(
-            grid=(m // BLOCK_M, n // BLOCK_N, 1),
+            grid=((m // BLOCK_M) * (n // BLOCK_N), 1, 1),
             block=(BLOCK_THREADS, 1, 1),
             stream=stream,
         )
