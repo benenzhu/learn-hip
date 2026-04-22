@@ -10,7 +10,7 @@ log = logmodule.log
 
 importlib.reload(rtc)
 # import tritonblas
-from tritonblas.matmul import persistent_matmul_lt
+# from tritonblas.matmul import persistent_matmul_lt
 # importlib.reload(tritonblas)
 # from tritonblas.matmul import persistent_matmul_lt
 # importlib.reload(tritonblas.matmul)
