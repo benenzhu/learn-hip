@@ -514,5 +514,27 @@ def _03_fp16_gemm_v8(M, N, K):
     
 
 # ret = _03_fp16_gemm_v7(4864, 4096, 4096)  # for mi300x
-ret = _03_fp16_gemm_v8(4096, 4096, 4096)  # for mi355x
+# ret = _03_fp16_gemm_v8(4096, 4096, 4096)  # for mi355x
+
+
+def _04_nt_gemm_flydsl(M, N, K):
+    """FlyDSL port of 03_fp16_gemm_gfx950_v1 — module name starts with a digit
+    so we load via importlib instead of `import 04_nt_gemm_flyDsl_gfx950`."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "nt_gemm_flydsl_gfx950", "04_nt_gemm_flyDsl_gfx950.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    A, B, C = get_inputNTN(M, N, K)
+    # Warm-up + JIT compile (cached by lru_cache on (M,N,K)).
+    mod.run(M, N, K, A, B, C)
+    log(f"GRID=({M//mod.BLOCK_M},{N//mod.BLOCK_N},1), TB={mod.NUM_THREADS}, smem={mod.SMEM_BYTES}")
+    kernel_fn = lambda: mod.run(M, N, K, A, B, C)
+    ret = bench(kernel_fn, A, B, C)
+    return ret
+
+
+ret = _04_nt_gemm_flydsl(4096, 4096, 4096)  # FlyDSL NT GEMM, gfx950
 
