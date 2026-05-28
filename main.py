@@ -583,5 +583,53 @@ def _04_nt_gemm_flydsl_v2(M, N, K):
     return ret
 
 
-ret = _04_nt_gemm_flydsl_v2(8192, 8192, 8192)  # FlyDSL NT GEMM v2 — match HK 8192³ benchmark
+# ret = _04_nt_gemm_flydsl_v2(8192, 8192, 8192)  # FlyDSL NT GEMM v2 — match HK 8192³ benchmark
 
+def fp4_gemm_atom(): 
+    atom_kernel = get_kernel(
+        "mfma_fp32_32x32x64_fp4_fp4",
+        "05_fp4_gemm_atom.hip",
+    )
+
+    torch.manual_seed(5)
+    # Logical operands for one MFMA atom:
+    #   A: [32, 64] fp4 e2m1
+    #   B: [64, 32] fp4 e2m1
+    # Each uint8 stores two fp4 values: low nibble then high nibble.
+    a_nibbles = torch.randint(0, 16, (32, 64), dtype=torch.uint8)
+    b_nibbles = torch.randint(0, 16, (64, 32), dtype=torch.uint8)
+
+    A = (a_nibbles[:, 0::2] | (a_nibbles[:, 1::2] << 4)).contiguous().cuda()
+
+    # Match the B layout consumed by 05_fp4_gemm_atom.hip:
+    #   byte offset = k_half * 512 + k_inner * 16 + n_pair
+    #   low/high nibble hold adjacent N columns.
+    B_host = torch.empty((64 * 32 // 2,), dtype=torch.uint8)
+    for k in range(64):
+        k_half = k // 32
+        k_inner = k % 32
+        for n_pair in range(16):
+            B_host[k_half * 512 + k_inner * 16 + n_pair] = (
+                b_nibbles[k, 2 * n_pair] | (b_nibbles[k, 2 * n_pair + 1] << 4)
+            )
+    B = B_host.cuda()
+    C = torch.empty((32, 32), device="cuda", dtype=torch.float32)
+
+    atom_kernel((1, 1, 1), (64, 1, 1), (A, B, C))
+    torch.cuda.synchronize()
+
+    fp4_to_f32 = torch.tensor(
+        [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
+         -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0],
+        device="cuda",
+        dtype=torch.float32,
+    )
+    expected = (
+        fp4_to_f32[a_nibbles.cuda().long()]
+        @ fp4_to_f32[b_nibbles.cuda().long()]
+    )
+    torch.testing.assert_close(C, expected, rtol=0, atol=0)
+    log("fp4_gemm_atom passed: random fp4 layout matches torch reference")
+    return C
+
+ret = fp4_gemm_atom()
