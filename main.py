@@ -585,7 +585,7 @@ def _04_nt_gemm_flydsl_v2(M, N, K):
 
 # ret = _04_nt_gemm_flydsl_v2(8192, 8192, 8192)  # FlyDSL NT GEMM v2 — match HK 8192³ benchmark
 
-def fp4_gemm_atom(): 
+def fp4_gemm_atom_323264(): 
     atom_kernel = get_kernel(
         "mfma_fp32_32x32x64_fp4_fp4",
         "05_fp4_gemm_atom.hip",
@@ -632,4 +632,135 @@ def fp4_gemm_atom():
     log("fp4_gemm_atom passed: random fp4 layout matches torch reference")
     return C
 
-ret = fp4_gemm_atom()
+# ret = fp4_gemm_atom_323264()
+
+def fp4_gemm_atom_1616128():
+    atom_kernel = get_kernel(
+        "mfma_fp32_16x16x128_fp4_fp4",
+        "05_fp4_gemm_atom.hip",
+    )
+
+    torch.manual_seed(6)
+    # Logical operands for one MFMA atom:
+    #   A: [16, 128] fp4 e2m1
+    #   B: [128, 16] fp4 e2m1
+    a_nibbles = torch.randint(0, 16, (16, 128), dtype=torch.uint8)
+    b_nibbles = torch.randint(0, 16, (128, 16), dtype=torch.uint8)
+    a_scales = torch.randint(124, 128, (16, 4), dtype=torch.uint8)
+    b_scales = torch.randint(124, 128, (16, 4), dtype=torch.uint8)
+
+    A = (a_nibbles[:, 0::2] | (a_nibbles[:, 1::2] << 4)).contiguous().cuda()
+
+    # Match mfma_fp32_16x16x128_fp4_fp4:
+    #   byte offset = k_lane * 32 * 8 + k_inner * 8 + n_pair
+    #   low/high nibble hold adjacent N columns.
+    B_host = torch.empty((128 * 16 // 2,), dtype=torch.uint8)
+    for k in range(128):
+        k_lane = k // 32
+        k_inner = k % 32
+        for n_pair in range(8):
+            B_host[k_lane * 32 * 8 + k_inner * 8 + n_pair] = (
+                b_nibbles[k, 2 * n_pair] | (b_nibbles[k, 2 * n_pair + 1] << 4)
+            )
+    B = B_host.cuda()
+    # Scale operands are lane-local for this atom:
+    #   offset = k_lane * 16 + lane_mn
+    # where k_lane selects one 32-wide K quarter.
+    AScale = a_scales.T.contiguous().cuda()
+    BScale = b_scales.T.contiguous().cuda()
+    C = torch.empty((16, 16), device="cuda", dtype=torch.float32)
+
+    atom_kernel((1, 1, 1), (64, 1, 1), (A, B, AScale, BScale, C))
+    torch.cuda.synchronize()
+
+    fp4_to_f32 = torch.tensor(
+        [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
+         -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0],
+        device="cuda",
+        dtype=torch.float32,
+    )
+    a_f32 = fp4_to_f32[a_nibbles.cuda().long()]
+    b_f32 = fp4_to_f32[b_nibbles.cuda().long()]
+    a_scale_f32 = 2 ** (a_scales.cuda().repeat_interleave(32, dim=1).to(torch.float32) - 127)
+    b_scale_f32 = 2 ** (
+        b_scales.cuda().T.repeat_interleave(32, dim=0).to(torch.float32) - 127
+    )
+    expected = (a_f32 * a_scale_f32) @ (b_f32 * b_scale_f32)
+    torch.testing.assert_close(C, expected, rtol=0, atol=1e-5)
+    log("fp4_gemm_atom_1616128 passed: random fp4 data and E8M0 scale layout match torch reference")
+    return C
+
+
+# fp4_gemm_atom_1616128()
+
+
+def fp4_gemm_tile_3232256_packed_scale(
+    kernel_name="mfma_fp32_32x32x256_fp4_fp4_packed_scale",
+    log_label="fp4_gemm_tile_3232256_packed_scale",
+):
+    tile_kernel = get_kernel(
+        kernel_name,
+        "05_fp4_gemm_atom.hip",
+    )
+
+    torch.manual_seed(7)
+    # Logical tile assembled from 8 x 16x16x128 atoms:
+    #   2 M halves x 2 N halves x 2 K halves.
+    a_nibbles = torch.randint(0, 16, (32, 256), dtype=torch.uint8)
+    b_nibbles = torch.randint(0, 16, (256, 32), dtype=torch.uint8)
+    a_scales = torch.randint(124, 128, (32, 8), dtype=torch.uint8)
+    b_scales = torch.randint(124, 128, (32, 8), dtype=torch.uint8)
+
+    A = (a_nibbles[:, 0::2] | (a_nibbles[:, 1::2] << 4)).contiguous().cuda()
+
+    # B is logical [K, N], packed along N pairs.
+    B_host = torch.empty((256, 16), dtype=torch.uint8)
+    for k in range(256):
+        for n_pair in range(16):
+            B_host[k, n_pair] = (
+                b_nibbles[k, 2 * n_pair] | (b_nibbles[k, 2 * n_pair + 1] << 4)
+            )
+    B = B_host.contiguous().cuda()
+
+    def pack_scale_32x8(scales: torch.Tensor):
+        words = torch.empty((4, 16), dtype=torch.int32)
+        for kg_inner in range(4):
+            for inner in range(16):
+                words[kg_inner, inner] = (
+                    scales[inner, kg_inner].to(torch.int32)
+                    | (scales[16 + inner, kg_inner].to(torch.int32) << 8)
+                    | (scales[inner, 4 + kg_inner].to(torch.int32) << 16)
+                    | (scales[16 + inner, 4 + kg_inner].to(torch.int32) << 24)
+                )
+        return words.contiguous()
+
+    AScale = pack_scale_32x8(a_scales).cuda()
+    BScale = pack_scale_32x8(b_scales).cuda()
+    C = torch.empty((32, 32), device="cuda", dtype=torch.float32)
+
+    tile_kernel((1, 1, 1), (64, 1, 1), (A, B, AScale, BScale, C))
+    torch.cuda.synchronize()
+
+    fp4_to_f32 = torch.tensor(
+        [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
+         -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0],
+        device="cuda",
+        dtype=torch.float32,
+    )
+    a_f32 = fp4_to_f32[a_nibbles.cuda().long()]
+    b_f32 = fp4_to_f32[b_nibbles.cuda().long()]
+    a_scale_f32 = 2 ** (a_scales.cuda().repeat_interleave(32, dim=1).to(torch.float32) - 127)
+    b_scale_f32 = 2 ** (
+        b_scales.cuda().T.repeat_interleave(32, dim=0).to(torch.float32) - 127
+    )
+    expected = (a_f32 * a_scale_f32) @ (b_f32 * b_scale_f32)
+    torch.testing.assert_close(C, expected, rtol=0, atol=1e-5)
+    log(f"{log_label} passed: packed scale word uses all four bytes")
+    return C
+
+
+def fp4_gemm_tile_3232256_scale_preshuffle():
+    return fp4_gemm_tile_3232256_packed_scale(
+        kernel_name="mfma_fp32_32x32x256_fp4_fp4_scale_preshuffle",
+        log_label="fp4_gemm_tile_3232256_scale_preshuffle",
+    )
