@@ -284,10 +284,10 @@ def draw_16x16x128_a_c_annotated(path: Path):
     # Zoom one lane-0 register to show it contains 8 fp4 values.
     zoom_x, zoom_y = a_x - 60, a_y - 35
     zoom_cell_w, zoom_h = 18, 18
-    for i in range(8):
+    for i in range(4):
         svg.rect(zoom_x + i * zoom_cell_w, zoom_y, zoom_cell_w, zoom_h, "#ffe6e6", "#777", 0.8)
         svg.text(zoom_x + (i + 0.5) * zoom_cell_w, zoom_y + 13, "0", "tiny", "middle")
-    svg.text(zoom_x + 4 * zoom_cell_w, zoom_y - 10, "8 fp4", "dim", "middle")
+    svg.text(zoom_x + 4 * zoom_cell_w, zoom_y - 10, "4 fp4", "dim", "middle")
     svg.arrow(zoom_x + 4 * zoom_cell_w, zoom_y + zoom_h, a_x + 0.5 * cell_w, a_y)# + 0.5 * row_h_a)
 
     # C matrix.
