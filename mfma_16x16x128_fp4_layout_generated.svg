@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="820" viewBox="0 0 1180 820">
+<style>
+.title{font:700 28px Arial,sans-serif;fill:#1f5f99}
+.label{font:700 24px Arial,sans-serif;fill:#b33}
+.dim{font:18px Arial,sans-serif;fill:#222}
+.text{font:15px Arial,sans-serif;fill:#222}
+.small{font:12px Arial,sans-serif;fill:#333}
+.tiny{font:10px Arial,sans-serif;fill:#333}
+.callout{font:14px Arial,sans-serif;fill:#222}
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#333"/></marker></defs>
+<text x="55" y="60" class="title" text-anchor="start">v_mfma_scale_f32_16x16x128_f4_f4 original layout</text>
+<rect x="95" y="110.0" width="320" height="20.0" fill="#ffe6e6" stroke="#777" stroke-width="1"/>
+<text x="425" y="124.0" class="tiny" text-anchor="start">kg0</text>
+<rect x="95" y="130.0" width="320" height="20.0" fill="#e8f4ff" stroke="#777" stroke-width="1"/>
+<text x="425" y="144.0" class="tiny" text-anchor="start">kg1</text>
+<rect x="95" y="150.0" width="320" height="20.0" fill="#e7ffe7" stroke="#777" stroke-width="1"/>
+<text x="425" y="164.0" class="tiny" text-anchor="start">kg2</text>
+<rect x="95" y="170.0" width="320" height="20.0" fill="#fff3d9" stroke="#777" stroke-width="1"/>
+<text x="425" y="184.0" class="tiny" text-anchor="start">kg3</text>
+<rect x="95" y="110" width="320" height="80" fill="none" stroke="#333" stroke-width="1.5"/>
+<text x="50" y="158.0" class="label" text-anchor="start">Ax</text>
+<text x="255.0" y="98" class="dim" text-anchor="middle">16 rows</text>
+<text x="105" y="214" class="small" text-anchor="start">Scale[lane_k, lane_mn] = [4 K-groups, 16 rows]</text>
+<rect x="95.0" y="340" width="130.0" height="160" fill="#ffe6e6" stroke="#777" stroke-width="1"/>
+<text x="105.0" y="364" class="small" text-anchor="start">K 0..31
+lanes 0..15</text>
+<rect x="225.0" y="340" width="130.0" height="160" fill="#e8f4ff" stroke="#777" stroke-width="1"/>
+<text x="235.0" y="364" class="small" text-anchor="start">K 32..63
+lanes 16..31</text>
+<line x1="225.0" y1="340" x2="225.0" y2="500" stroke="#777" stroke-width="1"/>
+<rect x="355.0" y="340" width="130.0" height="160" fill="#e7ffe7" stroke="#777" stroke-width="1"/>
+<text x="365.0" y="364" class="small" text-anchor="start">K 64..95
+lanes 32..47</text>
+<line x1="355.0" y1="340" x2="355.0" y2="500" stroke="#777" stroke-width="1"/>
+<rect x="485.0" y="340" width="130.0" height="160" fill="#fff3d9" stroke="#777" stroke-width="1"/>
+<text x="495.0" y="364" class="small" text-anchor="start">K 96..127
+lanes 48..63</text>
+<line x1="485.0" y1="340" x2="485.0" y2="500" stroke="#777" stroke-width="1"/>
+<rect x="95" y="340" width="520" height="160" fill="none" stroke="#333" stroke-width="1.5"/>
+<text x="53" y="428.0" class="label" text-anchor="start">A</text>
+<text x="355.0" y="326" class="dim" text-anchor="middle">K:128</text>
+<text x="630" y="420.0" class="dim" text-anchor="start">M:16</text>
+<text x="165" y="530" class="small" text-anchor="start">A lane reads A[row=lane_mn, K=lane_k*32 : +32]</text>
+<rect x="750" y="70.0" width="320" height="20.0" fill="#ffe6e6" stroke="#777" stroke-width="1"/>
+<text x="1080" y="84.0" class="tiny" text-anchor="start">kg0</text>
+<rect x="750" y="90.0" width="320" height="20.0" fill="#e8f4ff" stroke="#777" stroke-width="1"/>
+<text x="1080" y="104.0" class="tiny" text-anchor="start">kg1</text>
+<rect x="750" y="110.0" width="320" height="20.0" fill="#e7ffe7" stroke="#777" stroke-width="1"/>
+<text x="1080" y="124.0" class="tiny" text-anchor="start">kg2</text>
+<rect x="750" y="130.0" width="320" height="20.0" fill="#fff3d9" stroke="#777" stroke-width="1"/>
+<text x="1080" y="144.0" class="tiny" text-anchor="start">kg3</text>
+<rect x="750" y="70" width="320" height="80" fill="none" stroke="#333" stroke-width="1.5"/>
+<text x="705" y="118.0" class="label" text-anchor="start">Bx</text>
+<text x="910.0" y="58" class="dim" text-anchor="middle">16 cols</text>
+<text x="760" y="174" class="small" text-anchor="start">Scale[lane_k, lane_mn] = [4 K-groups, 16 cols]</text>
+<rect x="750" y="230.0" width="320" height="90.0" fill="#ffe6e6" stroke="#777" stroke-width="1"/>
+<text x="762" y="279.0" class="small" text-anchor="start">K 0..31 / lanes 0..15</text>
+<rect x="750" y="320.0" width="320" height="90.0" fill="#e8f4ff" stroke="#777" stroke-width="1"/>
+<text x="762" y="369.0" class="small" text-anchor="start">K 32..63 / lanes 16..31</text>
+<line x1="750" y1="320.0" x2="1070" y2="320.0" stroke="#777" stroke-width="1"/>
+<rect x="750" y="410.0" width="320" height="90.0" fill="#e7ffe7" stroke="#777" stroke-width="1"/>
+<text x="762" y="459.0" class="small" text-anchor="start">K 64..95 / lanes 32..47</text>
+<line x1="750" y1="410.0" x2="1070" y2="410.0" stroke="#777" stroke-width="1"/>
+<rect x="750" y="500.0" width="320" height="90.0" fill="#fff3d9" stroke="#777" stroke-width="1"/>
+<text x="762" y="549.0" class="small" text-anchor="start">K 96..127 / lanes 48..63</text>
+<line x1="750" y1="500.0" x2="1070" y2="500.0" stroke="#777" stroke-width="1"/>
+<rect x="750" y="230" width="320" height="360" fill="none" stroke="#333" stroke-width="1.5"/>
+<text x="708" y="418.0" class="label" text-anchor="start">B</text>
+<text x="910.0" y="216" class="dim" text-anchor="middle">N:16</text>
+<text x="1085" y="410.0" class="dim" text-anchor="start">K:128</text>
+<text x="780" y="620" class="small" text-anchor="start">B lane reads B[K=lane_k*32 : +32, col=lane_mn]</text>
+<rect x="750" y="670.0" width="320" height="30.0" fill="#ffe6e6" stroke="#777" stroke-width="1"/>
+<text x="762" y="689.0" class="small" text-anchor="start">rows 0..3 by lane_k=0</text>
+<rect x="750" y="700.0" width="320" height="30.0" fill="#e8f4ff" stroke="#777" stroke-width="1"/>
+<text x="762" y="719.0" class="small" text-anchor="start">rows 4..7 by lane_k=1</text>
+<line x1="750" y1="700.0" x2="1070" y2="700.0" stroke="#777" stroke-width="1"/>
+<rect x="750" y="730.0" width="320" height="30.0" fill="#e7ffe7" stroke="#777" stroke-width="1"/>
+<text x="762" y="749.0" class="small" text-anchor="start">rows 8..11 by lane_k=2</text>
+<line x1="750" y1="730.0" x2="1070" y2="730.0" stroke="#777" stroke-width="1"/>
+<rect x="750" y="760.0" width="320" height="30.0" fill="#fff3d9" stroke="#777" stroke-width="1"/>
+<text x="762" y="779.0" class="small" text-anchor="start">rows 12..15 by lane_k=3</text>
+<line x1="750" y1="760.0" x2="1070" y2="760.0" stroke="#777" stroke-width="1"/>
+<rect x="750" y="670" width="320" height="120" fill="none" stroke="#333" stroke-width="1.5"/>
+<text x="708" y="738.0" class="label" text-anchor="start">C/D</text>
+<text x="910.0" y="656" class="dim" text-anchor="middle">N:16</text>
+<text x="1085" y="730.0" class="dim" text-anchor="start">M:16</text>
+</svg>
