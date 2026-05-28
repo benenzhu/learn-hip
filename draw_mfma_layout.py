@@ -216,7 +216,7 @@ def draw_16x16x128_a_c_annotated(path: Path):
     for r in range(1, 16):
         svg.line(ax_x, ax_y + r * row_h, ax_x + ax_w, ax_y + r * row_h, "#bbb", 0.5)
     svg.rect(ax_x, ax_y, ax_w, ax_h, "none", "#333", 1.5)
-    svg.text(ax_x + ax_w / 2, ax_y - 12, "E8M0", "dim", "middle")
+    svg.text(ax_x + ax_w / 2, ax_y - 12, "K//32:4", "dim", "middle")
     svg.text(ax_x + ax_w + 12, ax_y + ax_h / 2, "M:16", "dim")
     for kg in range(4):
         svg.text(ax_x + kg * col_w + col_w / 2, ax_y + ax_h + 12, f"{kg}", "tiny", "middle")

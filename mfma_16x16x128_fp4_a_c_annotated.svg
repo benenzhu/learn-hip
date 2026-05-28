@@ -34,7 +34,7 @@
 <line x1="105" y1="334.0" x2="169" y2="334.0" stroke="#bbb" stroke-width="0.5"/>
 <line x1="105" y1="350.0" x2="169" y2="350.0" stroke="#bbb" stroke-width="0.5"/>
 <rect x="105" y="110" width="64" height="256" fill="none" stroke="#333" stroke-width="1.5"/>
-<text x="137.0" y="98" class="dim" text-anchor="middle">E8M0</text>
+<text x="137.0" y="98" class="dim" text-anchor="middle">K//32:4</text>
 <text x="181" y="238.0" class="dim" text-anchor="start">M:16</text>
 <text x="113.0" y="378" class="tiny" text-anchor="middle">0</text>
 <text x="129.0" y="378" class="tiny" text-anchor="middle">1</text>
