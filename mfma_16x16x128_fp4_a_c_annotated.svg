@@ -382,8 +382,8 @@
 <text x="382" y="636.0" class="small" text-anchor="start">...</text>
 <text x="370" y="735.52" class="tiny" text-anchor="start">row14</text>
 <text x="370" y="751.52" class="tiny" text-anchor="start">row15</text>
-<text x="418.0" y="772" class="tiny" text-anchor="middle">col0</text>
-<text x="434.0" y="772" class="tiny" text-anchor="middle">col1</text>
-<text x="642.0" y="772" class="tiny" text-anchor="middle">col14</text>
-<text x="658.0" y="772" class="tiny" text-anchor="middle">col15</text>
+<text x="418.0" y="772" class="tiny" text-anchor="middle">c0</text>
+<text x="434.0" y="772" class="tiny" text-anchor="middle">c1</text>
+<text x="642.0" y="772" class="tiny" text-anchor="middle">c14</text>
+<text x="658.0" y="772" class="tiny" text-anchor="middle">c15</text>
 </svg>
