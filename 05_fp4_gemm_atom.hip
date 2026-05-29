@@ -62,84 +62,6 @@ __device__ __forceinline__ fp32x4_t mfma_16x16x128_fp4_fp4(
     );
 }
 
-template <int M_HALF, int N_HALF, int K_HALF>
-__device__ __forceinline__ fp32x4_t mfma_16x16x128_subatom_preshuffled_scale(
-    const fp4x2_t* A,
-    const fp4x2_t* B,
-    const unsigned int a_scale_word,
-    const unsigned int b_scale_word,
-    const int lane_mn,
-    const int lane_k,
-    const fp32x4_t c_reg
-) {
-    fp4x32_t a_reg{};
-    fp4x32_t b_reg{};
-
-    const int a_row = M_HALF * 16 + lane_mn;
-    const int k_base = K_HALF * 128 + lane_k * 32;
-    const fp4x2_t* ldg_a = A + a_row * 128 + k_base / 2;
-    #pragma unroll
-    for (int i = 0; i < 16; ++i) {
-        a_reg[i] = ldg_a[i];
-    }
-
-    const int b_col = N_HALF * 16 + lane_mn;
-    const fp4x2_t* ldg_b = B + k_base * 16 + b_col / 2;
-    const int b_extract_idx = b_col & 1;
-    #pragma unroll
-    for (int i = 0; i < 16; ++i) {
-        const unsigned char lo = extract_fp4(ldg_b[16 * (2 * i)], b_extract_idx);
-        const unsigned char hi = extract_fp4(ldg_b[16 * (2 * i + 1)], b_extract_idx);
-        b_reg[i] = create_fp4x2(lo, hi);
-    }
-
-    constexpr int A_SCALE_BYTE = M_HALF + 2 * K_HALF;
-    constexpr int B_SCALE_BYTE = N_HALF + 2 * K_HALF;
-
-    return mfma_16x16x128_fp4_fp4_opsel<A_SCALE_BYTE, B_SCALE_BYTE>(
-        a_reg,
-        b_reg,
-        c_reg,
-        a_scale_word,
-        b_scale_word
-    );
-}
-
-template <int M_HALF, int N_HALF>
-__device__ __forceinline__ void store_16x16_subtile(
-    float* C,
-    const fp32x4_t c_reg,
-    const int lane_mn,
-    const int lane_k
-) {
-    #pragma unroll
-    for (int i = 0; i < 4; ++i) {
-        const int c_row = M_HALF * 16 + lane_k * 4 + i;
-        const int c_col = N_HALF * 16 + lane_mn;
-        C[c_row * 32 + c_col] = c_reg[i];
-    }
-}
-
-template <int M_HALF, int N_HALF>
-__device__ __forceinline__ void compute_16x16_output_tile_preshuffled_scale(
-    const fp4x2_t* A,
-    const fp4x2_t* B,
-    const unsigned int a_scale_word,
-    const unsigned int b_scale_word,
-    float* C,
-    const int lane_mn,
-    const int lane_k
-) {
-    fp32x4_t c_reg{};
-    c_reg = mfma_16x16x128_subatom_preshuffled_scale<M_HALF, N_HALF, 0>(
-        A, B, a_scale_word, b_scale_word, lane_mn, lane_k, c_reg
-    );
-    c_reg = mfma_16x16x128_subatom_preshuffled_scale<M_HALF, N_HALF, 1>(
-        A, B, a_scale_word, b_scale_word, lane_mn, lane_k, c_reg
-    );
-    store_16x16_subtile<M_HALF, N_HALF>(C, c_reg, lane_mn, lane_k);
-}
-
 __global__ void mfma_fp32_32x32x64_fp4_fp4(
     const fp4x2_t* A,
     const fp4x2_t* B,
@@ -199,26 +121,6 @@ __global__ void mfma_fp32_32x32x64_fp4_fp4(
         C[lane_n + (lane_k * 4 + 2) * 32 + i * 32 * 8] = c_reg[i * 4 + 2];
         C[lane_n + (lane_k * 4 + 3) * 32 + i * 32 * 8] = c_reg[i * 4 + 3];
     }
-}
-
-__global__ void mfma_fp32_32x32x256_fp4_fp4_scale_preshuffle(
-    const fp4x2_t* A,
-    const fp4x2_t* B,
-    const unsigned int* AScale,
-    const unsigned int* BScale,
-    float* C
-) {
-    const int tid = threadIdx.x;
-    const int lane_mn = tid & 15;
-    const int lane_k = tid >> 4;
-    const int word_idx = lane_k * 16 + lane_mn;
-    const unsigned int a_scale_word = AScale[word_idx];
-    const unsigned int b_scale_word = BScale[word_idx];
-
-    compute_16x16_output_tile_preshuffled_scale<0, 0>(A, B, a_scale_word, b_scale_word, C, lane_mn, lane_k);
-    compute_16x16_output_tile_preshuffled_scale<0, 1>(A, B, a_scale_word, b_scale_word, C, lane_mn, lane_k);
-    compute_16x16_output_tile_preshuffled_scale<1, 0>(A, B, a_scale_word, b_scale_word, C, lane_mn, lane_k);
-    compute_16x16_output_tile_preshuffled_scale<1, 1>(A, B, a_scale_word, b_scale_word, C, lane_mn, lane_k);
 }
 
 __global__ void mfma_fp32_16x16x128_fp4_fp4(

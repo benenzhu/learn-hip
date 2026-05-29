@@ -696,11 +696,12 @@ def fp4_gemm_atom_1616128():
 
 def fp4_gemm_tile_3232256_packed_scale(
     kernel_name="mfma_fp32_32x32x256_fp4_fp4_packed_scale",
+    file_name="05_fp4_gemm_atom.hip",
     log_label="fp4_gemm_tile_3232256_packed_scale",
 ):
     tile_kernel = get_kernel(
         kernel_name,
-        "05_fp4_gemm_atom.hip",
+        file_name,
     )
 
     torch.manual_seed(7)
@@ -761,6 +762,7 @@ def fp4_gemm_tile_3232256_packed_scale(
 
 def fp4_gemm_tile_3232256_scale_preshuffle():
     return fp4_gemm_tile_3232256_packed_scale(
-        kernel_name="mfma_fp32_32x32x256_fp4_fp4_scale_preshuffle",
+        kernel_name="mfma_fp32_32x32x256_fp4_fp4_scale_preshuffle_16x16x128",
+        file_name="05_fp4_gemm_scale_preshuffle_16x16x128.hip",
         log_label="fp4_gemm_tile_3232256_scale_preshuffle",
     )
