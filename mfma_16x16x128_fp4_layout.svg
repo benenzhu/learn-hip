@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="820" viewBox="0 0 1180 820">
+  <defs>
+    <style>
+      .title { font: 700 28px Arial, sans-serif; fill: #1f5f99; }
+      .label { font: 700 24px Arial, sans-serif; fill: #b33; }
+      .text { font: 15px Arial, sans-serif; fill: #222; }
+      .small { font: 12px Arial, sans-serif; fill: #333; }
+      .tiny { font: 10px Arial, sans-serif; fill: #333; }
+      .dim { font: 18px Arial, sans-serif; fill: #222; }
+      .box { fill: #fff; stroke: #333; stroke-width: 1.5; }
+      .grid { fill: none; stroke: #777; stroke-width: 1; }
+      .kg0 { fill: #ffe6e6; }
+      .kg1 { fill: #e8f4ff; }
+      .kg2 { fill: #e7ffe7; }
+      .kg3 { fill: #fff3d9; }
+      .arrow { stroke: #333; stroke-width: 1.4; marker-end: url(#arrow); }
+      .dash { stroke: #aaa; stroke-width: 1; stroke-dasharray: 5 4; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#333"/>
+    </marker>
+  </defs>
+
+  <text x="55" y="60" class="title">v_mfma_scale_f32_16x16x128_f4_f4</text>
+
+  <!-- A scale -->
+  <text x="54" y="185" class="label">Ax</text>
+  <rect x="95" y="116" width="80" height="160" class="box"/>
+  <line x1="115" y1="116" x2="115" y2="276" class="grid"/>
+  <line x1="135" y1="116" x2="135" y2="276" class="grid"/>
+  <line x1="155" y1="116" x2="155" y2="276" class="grid"/>
+  <rect x="95" y="116" width="20" height="160" class="kg0"/>
+  <rect x="115" y="116" width="20" height="160" class="kg1"/>
+  <rect x="135" y="116" width="20" height="160" class="kg2"/>
+  <rect x="155" y="116" width="20" height="160" class="kg3"/>
+  <text x="94" y="106" class="dim">4 K-groups</text>
+  <text x="78" y="122" class="tiny">kg0</text>
+  <text x="78" y="162" class="tiny">kg1</text>
+  <text x="78" y="202" class="tiny">kg2</text>
+  <text x="78" y="242" class="tiny">kg3</text>
+  <text x="104" y="302" class="dim">16 rows</text>
+  <text x="190" y="138" class="small">lane uses</text>
+  <text x="190" y="156" class="small">Ax[lane_k, lane_mn]</text>
+  <text x="190" y="178" class="small">E8M0 byte</text>
+
+  <!-- A data -->
+  <text x="55" y="470" class="label">A</text>
+  <rect x="95" y="360" width="520" height="160" class="box"/>
+  <rect x="95" y="360" width="130" height="160" class="kg0"/>
+  <rect x="225" y="360" width="130" height="160" class="kg1"/>
+  <rect x="355" y="360" width="130" height="160" class="kg2"/>
+  <rect x="485" y="360" width="130" height="160" class="kg3"/>
+  <line x1="225" y1="360" x2="225" y2="520" class="grid"/>
+  <line x1="355" y1="360" x2="355" y2="520" class="grid"/>
+  <line x1="485" y1="360" x2="485" y2="520" class="grid"/>
+  <line x1="95" y1="400" x2="615" y2="400" class="dash"/>
+  <line x1="95" y1="440" x2="615" y2="440" class="dash"/>
+  <line x1="95" y1="480" x2="615" y2="480" class="dash"/>
+  <text x="308" y="345" class="dim">128 K</text>
+  <text x="62" y="445" class="dim">16</text>
+  <text x="126" y="382" class="small">K 0..31</text>
+  <text x="246" y="382" class="small">K 32..63</text>
+  <text x="376" y="382" class="small">K 64..95</text>
+  <text x="497" y="382" class="small">K 96..127</text>
+  <text x="117" y="505" class="small">lanes 0..15</text>
+  <text x="240" y="505" class="small">lanes 16..31</text>
+  <text x="370" y="505" class="small">lanes 32..47</text>
+  <text x="500" y="505" class="small">lanes 48..63</text>
+  <text x="230" y="550" class="small">A lane reads A[row=lane_mn, K=lane_k*32 : +32]</text>
+
+  <!-- B scale -->
+  <text x="705" y="85" class="label">Bx</text>
+  <rect x="750" y="55" width="320" height="80" class="box"/>
+  <rect x="750" y="55" width="320" height="20" class="kg0"/>
+  <rect x="750" y="75" width="320" height="20" class="kg1"/>
+  <rect x="750" y="95" width="320" height="20" class="kg2"/>
+  <rect x="750" y="115" width="320" height="20" class="kg3"/>
+  <line x1="750" y1="75" x2="1070" y2="75" class="grid"/>
+  <line x1="750" y1="95" x2="1070" y2="95" class="grid"/>
+  <line x1="750" y1="115" x2="1070" y2="115" class="grid"/>
+  <text x="878" y="45" class="dim">16 cols</text>
+  <text x="1080" y="70" class="tiny">kg0</text>
+  <text x="1080" y="90" class="tiny">kg1</text>
+  <text x="1080" y="110" class="tiny">kg2</text>
+  <text x="1080" y="130" class="tiny">kg3</text>
+  <text x="760" y="154" class="small">B lane uses Bx[lane_k, lane_mn]</text>
+
+  <!-- B data -->
+  <text x="710" y="275" class="label">B</text>
+  <rect x="750" y="190" width="320" height="360" class="box"/>
+  <rect x="750" y="190" width="320" height="90" class="kg0"/>
+  <rect x="750" y="280" width="320" height="90" class="kg1"/>
+  <rect x="750" y="370" width="320" height="90" class="kg2"/>
+  <rect x="750" y="460" width="320" height="90" class="kg3"/>
+  <line x1="750" y1="280" x2="1070" y2="280" class="grid"/>
+  <line x1="750" y1="370" x2="1070" y2="370" class="grid"/>
+  <line x1="750" y1="460" x2="1070" y2="460" class="grid"/>
+  <line x1="830" y1="190" x2="830" y2="550" class="dash"/>
+  <line x1="910" y1="190" x2="910" y2="550" class="dash"/>
+  <line x1="990" y1="190" x2="990" y2="550" class="dash"/>
+  <text x="865" y="180" class="dim">16 N</text>
+  <text x="1085" y="375" class="dim">128 K</text>
+  <text x="765" y="238" class="small">K 0..31 / lanes 0..15</text>
+  <text x="765" y="328" class="small">K 32..63 / lanes 16..31</text>
+  <text x="765" y="418" class="small">K 64..95 / lanes 32..47</text>
+  <text x="765" y="508" class="small">K 96..127 / lanes 48..63</text>
+  <text x="780" y="582" class="small">B lane reads B[K=lane_k*32 : +32, col=lane_mn]</text>
+
+  <!-- C/D -->
+  <text x="710" y="660" class="label">C/D</text>
+  <rect x="750" y="620" width="320" height="160" class="box"/>
+  <rect x="750" y="620" width="320" height="40" class="kg0"/>
+  <rect x="750" y="660" width="320" height="40" class="kg1"/>
+  <rect x="750" y="700" width="320" height="40" class="kg2"/>
+  <rect x="750" y="740" width="320" height="40" class="kg3"/>
+  <line x1="750" y1="660" x2="1070" y2="660" class="grid"/>
+  <line x1="750" y1="700" x2="1070" y2="700" class="grid"/>
+  <line x1="750" y1="740" x2="1070" y2="740" class="grid"/>
+  <text x="870" y="610" class="dim">16 N</text>
+  <text x="1085" y="705" class="dim">16 M</text>
+  <text x="760" y="645" class="small">rows 0..3  written by lane_k=0</text>
+  <text x="760" y="685" class="small">rows 4..7  written by lane_k=1</text>
+  <text x="760" y="725" class="small">rows 8..11 written by lane_k=2</text>
+  <text x="760" y="765" class="small">rows 12..15 written by lane_k=3</text>
+
+  <!-- Notes -->
+  <text x="95" y="635" class="text">lane_mn = threadIdx.x % 16</text>
+  <text x="95" y="660" class="text">lane_k  = threadIdx.x / 16</text>
+  <text x="95" y="685" class="text">Each lane has 32 fp4 A values, 32 fp4 B values, and 4 fp32 C accumulators.</text>
+  <text x="95" y="710" class="text">Scale is E8M0: one byte per 32 K values. For K=128, lane_k selects one of four K-groups.</text>
+</svg>
