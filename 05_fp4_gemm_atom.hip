@@ -1,11 +1,7 @@
 #include <hip/hip_runtime.h>
 
 using fp4x2_t = unsigned char;
-using fp4x32_t = fp4x2_t __attribute__((ext_vector_type(16)));
-using fp32x4_t = float __attribute__((ext_vector_type(4)));
 using fp32x16_t = float __attribute__((ext_vector_type(16)));
-using int32x4_t = int __attribute__((ext_vector_type(4)));
-using int32x8_t = int __attribute__((ext_vector_type(8)));
 
 __device__ __forceinline__ unsigned char extract_fp4(
     const fp4x2_t x,
@@ -21,6 +17,9 @@ __device__ __forceinline__ fp4x2_t create_fp4x2(
     return x | (y << 4);
 }
 
+using fp4x32_t = fp4x2_t __attribute__((ext_vector_type(16)));
+using fp32x4_t = float __attribute__((ext_vector_type(4)));
+using fp32x8_t = float __attribute__((ext_vector_type(8)));
 template <int OPSEL_A, int OPSEL_B>
 __device__ __forceinline__ fp32x4_t mfma_16x16x128_fp4_fp4_opsel(
     const fp4x32_t a_reg,
@@ -29,13 +28,13 @@ __device__ __forceinline__ fp32x4_t mfma_16x16x128_fp4_fp4_opsel(
     const unsigned int scale_a,
     const unsigned int scale_b
 ) {
-    const int32x4_t a_words = __builtin_bit_cast(int32x4_t, a_reg);
-    const int32x4_t b_words = __builtin_bit_cast(int32x4_t, b_reg);
-    const int32x8_t a_arg{a_words[0], a_words[1], a_words[2], a_words[3], 0, 0, 0, 0};
-    const int32x8_t b_arg{b_words[0], b_words[1], b_words[2], b_words[3], 0, 0, 0, 0};
+    const fp32x4_t a_words = __builtin_bit_cast(fp32x4_t, a_reg);
+    const fp32x4_t b_words = __builtin_bit_cast(fp32x4_t, b_reg);
+    const fp32x8_t a_arg{a_words[0], a_words[1], a_words[2], a_words[3], 0, 0, 0, 0};
+    const fp32x8_t b_arg{b_words[0], b_words[1], b_words[2], b_words[3], 0, 0, 0, 0};
 
     return __builtin_amdgcn_mfma_scale_f32_16x16x128_f8f6f4(
-        a_arg,
+        a_arg, // 指令这里规定一定传入的要是  int[8]. 后面传0的话，测试是不会占用多余的寄存器的，生成的指令里面只有4个.
         b_arg,
         c_reg,
         4, // A format: fp4 e2m1
@@ -173,10 +172,10 @@ __global__ void mfma_fp32_32x32x64_fp4_fp4(
         b_reg[i] = create_fp4x2(lo, hi);
     }
 
-    const int32x4_t a_words = __builtin_bit_cast(int32x4_t, a_reg);
-    const int32x4_t b_words = __builtin_bit_cast(int32x4_t, b_reg);
-    const int32x8_t a_arg{a_words[0], a_words[1], a_words[2], a_words[3], 0, 0, 0, 0};
-    const int32x8_t b_arg{b_words[0], b_words[1], b_words[2], b_words[3], 0, 0, 0, 0};
+    const fp32x4_t a_words = __builtin_bit_cast(fp32x4_t, a_reg);
+    const fp32x4_t b_words = __builtin_bit_cast(fp32x4_t, b_reg);
+    const fp32x8_t a_arg{a_words[0], a_words[1], a_words[2], a_words[3], 0, 0, 0, 0};
+    const fp32x8_t b_arg{b_words[0], b_words[1], b_words[2], b_words[3], 0, 0, 0, 0};
 
     const unsigned int scale_a = 127u; // e8m0 scale 2^(127 - 127) = 1.0
     const unsigned int scale_b = 127u;
@@ -256,10 +255,10 @@ __global__ void mfma_fp32_16x16x128_fp4_fp4(
         b_reg[i] = create_fp4x2(lo, hi);
     }
 
-    const int32x4_t a_words = __builtin_bit_cast(int32x4_t, a_reg);
-    const int32x4_t b_words = __builtin_bit_cast(int32x4_t, b_reg);
-    const int32x8_t a_arg{a_words[0], a_words[1], a_words[2], a_words[3], 0, 0, 0, 0};
-    const int32x8_t b_arg{b_words[0], b_words[1], b_words[2], b_words[3], 0, 0, 0, 0};
+    const fp32x4_t a_words = __builtin_bit_cast(fp32x4_t, a_reg);
+    const fp32x4_t b_words = __builtin_bit_cast(fp32x4_t, b_reg);
+    const fp32x8_t a_arg{a_words[0], a_words[1], a_words[2], a_words[3], 0, 0, 0, 0};
+    const fp32x8_t b_arg{b_words[0], b_words[1], b_words[2], b_words[3], 0, 0, 0, 0};
 
     // With opselA=opselB=0, the instruction consumes the low byte of each
     // scale operand. kABKLane=4, so each lane supplies the scale for its own
