@@ -697,6 +697,7 @@ def fp4_gemm_atom_1616128():
 def fp4_gemm_tile_3232256_packed_scale(
     kernel_name="mfma_fp32_32x32x256_fp4_fp4_packed_scale",
     file_name="05_fp4_gemm_atom.hip",
+    b_layout="row",
     log_label="fp4_gemm_tile_3232256_packed_scale",
 ):
     tile_kernel = get_kernel(
@@ -714,13 +715,24 @@ def fp4_gemm_tile_3232256_packed_scale(
 
     A = (a_nibbles[:, 0::2] | (a_nibbles[:, 1::2] << 4)).contiguous().cuda()
 
-    # B is logical [K, N], packed along N pairs.
-    B_host = torch.empty((256, 16), dtype=torch.uint8)
-    for k in range(256):
-        for n_pair in range(16):
-            B_host[k, n_pair] = (
-                b_nibbles[k, 2 * n_pair] | (b_nibbles[k, 2 * n_pair + 1] << 4)
-            )
+    if b_layout == "row":
+        # B is logical [K, N], packed along N pairs.
+        B_host = torch.empty((256, 16), dtype=torch.uint8)
+        for k in range(256):
+            for n_pair in range(16):
+                B_host[k, n_pair] = (
+                    b_nibbles[k, 2 * n_pair] | (b_nibbles[k, 2 * n_pair + 1] << 4)
+                )
+    elif b_layout == "col":
+        # B is logical [K, N], packed as col-major [N, K/2].
+        B_host = torch.empty((32, 128), dtype=torch.uint8)
+        for n in range(32):
+            for k_pair in range(128):
+                B_host[n, k_pair] = (
+                    b_nibbles[2 * k_pair, n] | (b_nibbles[2 * k_pair + 1, n] << 4)
+                )
+    else:
+        raise ValueError(f"Unsupported B layout: {b_layout}")
     B = B_host.contiguous().cuda()
 
     def pack_scale_32x8(scales: torch.Tensor):
@@ -764,5 +776,6 @@ def fp4_gemm_tile_3232256_scale_preshuffle():
     return fp4_gemm_tile_3232256_packed_scale(
         kernel_name="mfma_fp32_32x32x256_fp4_fp4_scale_preshuffle_16x16x128",
         file_name="05_fp4_gemm_scale_preshuffle_16x16x128.hip",
+        b_layout="col",
         log_label="fp4_gemm_tile_3232256_scale_preshuffle",
     )
